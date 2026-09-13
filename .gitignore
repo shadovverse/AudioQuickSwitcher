@@ -2,3 +2,6 @@
 # качается отдельно: https://www.nirsoft.net/utils/sound_volume_command_line.html
 svcl.exe
 svcl.chm
+
+# собранный установщик - артефакт сборки, раздаётся через GitHub Releases
+dist/

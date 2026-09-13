@@ -39,20 +39,42 @@ public class Win11ColorTable : ProfessionalColorTable {
 }
 "@
 
-# ---------- НАСТРОЙКИ: укажи свой путь к svcl.exe ----------
-$svcl = "B:\Утилиты\sound_script\svcl.exe"
-$voicemeeterExe = "C:\Program Files (x86)\VB\Voicemeeter\voicemeeter.exe"
-$voicemeeterProcessName = "voicemeeter"
-# -------------------------------------------------------------
-
-# Иконки лежат рядом со скриптом (mic_on_icon.ico / mic_off_icon.ico)
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# ---------- НАСТРОЙКИ ----------
+# Править руками ничего не нужно: всё определяется относительно самого скрипта,
+# поэтому папку установки можно выбрать любую.
+$scriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
+$svcl        = Join-Path $scriptDir "svcl.exe"
 $iconOnPath  = Join-Path $scriptDir "mic_icon_on.ico"
 $iconOffPath = Join-Path $scriptDir "mic_icon_off.ico"
 
+# Voicemeeter ищем сами: каталог установки и имя exe отличаются от машины к
+# машине (Standard / Banana / Potato). Если его нет - не страшно, утилита
+# работает и без него, просто не будет поднимать и гасить его при переключении.
+$voicemeeterExe = $null
+$voicemeeterProcessName = $null
+$vmDir = $null
+try {
+    $vmDir = Get-ChildItem "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction Stop |
+        ForEach-Object { Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue } |
+        Where-Object { $_.DisplayName -match "Voicemeeter" } |
+        Select-Object -First 1 -ExpandProperty UninstallString
+    if ($vmDir) { $vmDir = Split-Path -Parent ($vmDir -replace '^"|"$', '') }
+} catch {}
+if (-not $vmDir) { $vmDir = Join-Path ${env:ProgramFiles(x86)} "VB\Voicemeeter" }
+
+foreach ($exe in "voicemeeter.exe", "voicemeeterpro.exe", "voicemeeter8.exe") {
+    $candidate = Join-Path $vmDir $exe
+    if (Test-Path $candidate) {
+        $voicemeeterExe = $candidate
+        $voicemeeterProcessName = [IO.Path]::GetFileNameWithoutExtension($exe)
+        break
+    }
+}
+# -------------------------------------------------------------
+
 if (-not (Test-Path $svcl)) {
     [System.Windows.Forms.MessageBox]::Show(
-        "Не найден $svcl`n`nСкачай SoundVolumeCommandLine (svcl.exe) с nirsoft.net и укажи правильный путь в начале скрипта.",
+        "Рядом со скриптом нет svcl.exe.`n`nОжидался здесь:`n$svcl`n`nПереустанови AudioQuickSwitch - установщик докачивает svcl.exe с nirsoft.net сам.",
         "AudioQuickSwitch", "OK", "Error") | Out-Null
     exit
 }
@@ -209,16 +231,19 @@ function Disable-Listening-Silently {
 
 function Set-OutputDevice($deviceName) {
     $isVoicemeeter = $deviceName -match "Voicemeeter"
-    $vmProcess = Get-Process -Name $voicemeeterProcessName -ErrorAction SilentlyContinue
+    # $voicemeeterProcessName пуст, если Voicemeeter на этой машине не установлен
+    $vmProcess = if ($voicemeeterProcessName) {
+        Get-Process -Name $voicemeeterProcessName -ErrorAction SilentlyContinue
+    } else { $null }
 
     if ($isVoicemeeter) {
         if (-not $vmProcess) {
-            if (Test-Path $voicemeeterExe) {
+            if ($voicemeeterExe -and (Test-Path $voicemeeterExe)) {
                 Start-Process -FilePath $voicemeeterExe
                 # даём Voicemeeter время создать свои аудио-эндпоинты перед переключением
                 Start-Sleep -Milliseconds 1500
             } else {
-                $notifyIcon.ShowBalloonTip(1500, "Аудио", "Не найден Voicemeeter по пути $voicemeeterExe", [System.Windows.Forms.ToolTipIcon]::Warning)
+                $notifyIcon.ShowBalloonTip(1500, "Аудио", "Voicemeeter не найден на этом компьютере - переключаю устройство без него", [System.Windows.Forms.ToolTipIcon]::Warning)
             }
         }
     } else {
