@@ -326,6 +326,12 @@ function Build-Menu {
     $toggleItem.Add_Click({ Toggle-Listen })
     $menu.Items.Add($toggleItem) | Out-Null
 
+    # Штатный список устройств Windows (mmsys.cpl, вкладка "Воспроизведение") -
+    # в Windows 11 он спрятан глубоко в параметрах, отсюда до него один клик.
+    $panelItem = New-Object System.Windows.Forms.ToolStripMenuItem("Настройки звука Windows")
+    $panelItem.Add_Click({ Start-Process "control.exe" -ArgumentList "mmsys.cpl,,0" })
+    $menu.Items.Add($panelItem) | Out-Null
+
     $exitItem = New-Object System.Windows.Forms.ToolStripMenuItem("Выход")
     $exitItem.Add_Click({
         Disable-Listening-Silently
