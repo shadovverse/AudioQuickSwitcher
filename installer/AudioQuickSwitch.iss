@@ -33,9 +33,16 @@ OutputBaseFilename=AudioQuickSwitch-Setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-SetupIconFile=..\mic_icon_on.ico
-UninstallDisplayIcon={app}\mic_icon_on.ico
+; язык берём по системе, лишний диалог в начале не нужен
+ShowLanguageDialog=no
+SetupIconFile=..\app_icon.ico
+UninstallDisplayIcon={app}\app_icon.ico
 ArchitecturesInstallIn64BitMode=x64compatible
+
+; запись в "Установленные приложения" (HKCU, раз ставим в профиль пользователя)
+UninstallDisplayName={#AppName} {#AppVersion}
+AppVerName={#AppName} {#AppVersion}
+CreateUninstallRegKey=yes
 
 [Languages]
 Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
@@ -51,23 +58,28 @@ en.DownloadFail=Failed to download svcl.exe from nirsoft.net.%n%nCheck your conn
 ru.ExtractFail=Не удалось распаковать svcl.exe.%n%nУтилита без него не работает: скачай svcl-x64.zip с nirsoft.net вручную и положи svcl.exe рядом с AudioQuickSwitch.ps1.
 en.ExtractFail=Failed to unpack svcl.exe.%n%nThe app needs it: download svcl-x64.zip from nirsoft.net manually and put svcl.exe next to AudioQuickSwitch.ps1.
 
-[Tasks]
-Name: "startupicon"; Description: "{cm:TaskStartup}"; GroupDescription: "{cm:AdditionalIcons}"
-
 [Files]
 Source: "..\AudioQuickSwitch.ps1";     DestDir: "{app}"; Flags: ignoreversion
 Source: "..\{#Launcher}";              DestDir: "{app}"; Flags: ignoreversion
 Source: "..\mic_icon_on.ico";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\mic_icon_off.ico";         DestDir: "{app}"; Flags: ignoreversion
+Source: "..\app_icon.ico";            DestDir: "{app}"; Flags: ignoreversion
 ; вспомогательный скрипт - только на время установки, в {app} не попадает
 Source: "stop-running.ps1";            Flags: dontcopy
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\{#Launcher}"""; IconFilename: "{app}\mic_icon_on.ico"; WorkingDir: "{app}"
-Name: "{autostartup}\{#AppName}"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\{#Launcher}"""; IconFilename: "{app}\mic_icon_on.ico"; WorkingDir: "{app}"; Tasks: startupicon
 
 [Run]
+; Обе строки превращаются в галочки на последней странице мастера.
+; Автозапуск пишем значением в HKCU\...\Run, а не ярлыком в папке автозагрузки:
+; из [Run] можно запустить программу, но не создать ярлык, а reg.exe есть везде.
+Filename: "{sys}\reg.exe"; Parameters: "add ""HKCU\Software\Microsoft\Windows\CurrentVersion\Run"" /v {#AppName} /t REG_SZ /d ""\""{sys}\wscript.exe\"" \""{app}\{#Launcher}\"""" /f"; Description: "{cm:TaskStartup}"; Flags: postinstall skipifsilent runhidden
 Filename: "{sys}\wscript.exe"; Parameters: """{app}\{#Launcher}"""; WorkingDir: "{app}"; Description: "{cm:RunAfter}"; Flags: nowait postinstall skipifsilent
+
+[Registry]
+; само значение создаёт галочка выше; здесь только уборка при удалении
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "{#AppName}"; Flags: uninsdeletevalue
 
 [UninstallDelete]
 ; докачанное установщиком - Inno про эти файлы не знает, убираем вручную
