@@ -229,27 +229,26 @@ function Disable-Listening-Silently {
 [System.AppDomain]::CurrentDomain.add_ProcessExit({ Disable-Listening-Silently })
 [Microsoft.Win32.SystemEvents]::add_SessionEnding({ Disable-Listening-Silently })
 
-function Set-OutputDevice($deviceName) {
-    $isVoicemeeter = $deviceName -match "Voicemeeter"
-    # $voicemeeterProcessName пуст, если Voicemeeter на этой машине не установлен
-    $vmProcess = if ($voicemeeterProcessName) {
-        Get-Process -Name $voicemeeterProcessName -ErrorAction SilentlyContinue
-    } else { $null }
+# Поднимает Voicemeeter, если он не запущен. Возвращает $true, если пришлось запускать.
+# Запускаем свёрнутым: если в самом Voicemeeter включён режим System Tray, он уходит
+# сразу в трей, а не выскакивает окном.
+function Start-Voicemeeter {
+    if (-not $voicemeeterExe -or -not (Test-Path $voicemeeterExe)) {
+        $notifyIcon.ShowBalloonTip(1500, "Аудио", "Voicemeeter не найден на этом компьютере", [System.Windows.Forms.ToolTipIcon]::Warning)
+        return $false
+    }
+    if (Get-Process -Name $voicemeeterProcessName -ErrorAction SilentlyContinue) { return $false }
+    Start-Process -FilePath $voicemeeterExe -WindowStyle Minimized
+    return $true
+}
 
-    if ($isVoicemeeter) {
-        if (-not $vmProcess) {
-            if ($voicemeeterExe -and (Test-Path $voicemeeterExe)) {
-                Start-Process -FilePath $voicemeeterExe
-                # даём Voicemeeter время создать свои аудио-эндпоинты перед переключением
-                Start-Sleep -Milliseconds 1500
-            } else {
-                $notifyIcon.ShowBalloonTip(1500, "Аудио", "Voicemeeter не найден на этом компьютере - переключаю устройство без него", [System.Windows.Forms.ToolTipIcon]::Warning)
-            }
-        }
-    } else {
-        if ($vmProcess) {
-            Stop-Process -InputObject $vmProcess -Force
-        }
+function Set-OutputDevice($deviceName) {
+    if ($deviceName -match "Voicemeeter") {
+        # даём Voicemeeter время создать свои аудио-эндпоинты перед переключением
+        if (Start-Voicemeeter) { Start-Sleep -Milliseconds 1500 }
+    } elseif ($voicemeeterProcessName) {
+        # $voicemeeterProcessName пуст, если Voicemeeter на этой машине не установлен
+        Get-Process -Name $voicemeeterProcessName -ErrorAction SilentlyContinue | Stop-Process -Force
     }
 
     # Ждать подтверждения не нужно: замерено, что первый же /sjson после
@@ -301,6 +300,7 @@ function Build-Menu {
 
         foreach ($d in $playback) {
             $isDefault = ($d.Default -eq "Render")
+            if ($isDefault) { $script:defaultOutput = $d.Name }
             $mark = if ($isDefault) { "`t  ✔" } else { "" }
             $item = New-Object System.Windows.Forms.ToolStripMenuItem("$($d.Name)$mark")
             $item.Padding = New-Object System.Windows.Forms.Padding(4, 0, 2, 0)
@@ -359,6 +359,11 @@ function Refresh-Menu {
 }
 
 Refresh-Menu
+
+# Если ПК выключили, оставив устройством вывода Voicemeeter, после загрузки звук
+# уходит в его виртуальный вход, а сам Voicemeeter никто не запустил - тишина.
+# Build-Menu уже узнал текущее устройство, поднимаем Voicemeeter сразу.
+if ($script:defaultOutput -match "Voicemeeter") { Start-Voicemeeter | Out-Null }
 
 $notifyIcon.Add_MouseDown({
     param($s, $e)
