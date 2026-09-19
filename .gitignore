@@ -5,3 +5,6 @@ svcl.chm
 
 # собранный установщик - артефакт сборки, раздаётся через GitHub Releases
 dist/
+
+# svcl от NirSoft для сборки установщика: распаковать сюда svcl-x64.zip
+installer/vendor/

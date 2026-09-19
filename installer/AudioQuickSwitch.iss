@@ -1,16 +1,20 @@
 ﻿; Установщик AudioQuickSwitch.
 ; Сборка:  "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\AudioQuickSwitch.iss
 ;
-; svcl.exe намеренно НЕ лежит в репозитории и не вшит в установщик -
-; он качается с nirsoft.net во время установки (страница "Загрузка компонентов").
+; svcl.exe от NirSoft лежит внутри установщика (installer/vendor/svcl-x64).
+; Раньше он качался с nirsoft.net во время установки - от этого отказались:
+; у части машин установка обрывалась сразу после выбора папки (нет доступа
+; к сайту, антивирус блокирует NirSoft или запуск PowerShell из установщика).
+; Лицензия NirSoft разрешает свободно распространять утилиту без изменений.
+;
+; Перед сборкой: скачать svcl-x64.zip с nirsoft.net и распаковать в
+; installer/vendor/svcl-x64 (в репозиторий не коммитится).
 
 #define AppName        "AudioQuickSwitch"
 #define AppVersion     "1.0.0"
 #define AppPublisher   "shadovverse"
 #define AppURL         "https://github.com/shadovverse/fast_audioswitcher"
 #define Launcher       "Запустить_скрытно.vbs"
-#define SvclUrl32      "https://www.nirsoft.net/utils/svcl.zip"
-#define SvclUrl64      "https://www.nirsoft.net/utils/svcl-x64.zip"
 
 [Setup]
 AppId={{D9ED2889-A9F8-44B8-9D0E-4D2689043DA9}
@@ -37,6 +41,8 @@ WizardStyle=modern
 ShowLanguageDialog=no
 SetupIconFile=..\app_icon.ico
 UninstallDisplayIcon={app}\app_icon.ico
+; в комплекте только 64-битный svcl.exe - на 32-битной Windows ставить нечего
+ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
 ; запись в "Установленные приложения" (HKCU, раз ставим в профиль пользователя)
@@ -51,12 +57,8 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 [CustomMessages]
 ru.TaskStartup=Запускать при входе в Windows
 ru.RunAfter=Запустить {#AppName}
-ru.DownloadFail=Не удалось скачать svcl.exe с nirsoft.net.%n%nПроверь интернет и попробуй снова. Без этого файла утилита не заработает.%n%nОшибка: %1
 en.TaskStartup=Start with Windows
 en.RunAfter=Launch {#AppName}
-en.DownloadFail=Failed to download svcl.exe from nirsoft.net.%n%nCheck your connection and try again.%n%nError: %1
-ru.ExtractFail=Не удалось распаковать svcl.exe.%n%nУтилита без него не работает: скачай svcl-x64.zip с nirsoft.net вручную и положи svcl.exe рядом с AudioQuickSwitch.ps1.
-en.ExtractFail=Failed to unpack svcl.exe.%n%nThe app needs it: download svcl-x64.zip from nirsoft.net manually and put svcl.exe next to AudioQuickSwitch.ps1.
 
 [Files]
 Source: "..\AudioQuickSwitch.ps1";     DestDir: "{app}"; Flags: ignoreversion
@@ -64,6 +66,8 @@ Source: "..\{#Launcher}";              DestDir: "{app}"; Flags: ignoreversion
 Source: "..\mic_icon_on.ico";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\mic_icon_off.ico";         DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app_icon.ico";            DestDir: "{app}"; Flags: ignoreversion
+; svcl от NirSoft - кладём целиком, как требует его лицензия (exe + справка + readme)
+Source: "vendor\svcl-x64\*";          DestDir: "{app}"; Flags: ignoreversion
 ; вспомогательный скрипт - только на время установки, в {app} не попадает
 Source: "stop-running.ps1";            Flags: dontcopy
 
@@ -82,10 +86,6 @@ Filename: "{sys}\wscript.exe"; Parameters: """{app}\{#Launcher}"""; WorkingDir: 
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "{#AppName}"; Flags: uninsdeletevalue
 
 [UninstallDelete]
-; докачанное установщиком - Inno про эти файлы не знает, убираем вручную
-Type: files;          Name: "{app}\svcl.exe"
-Type: files;          Name: "{app}\svcl.chm"
-Type: files;          Name: "{app}\readme.txt"
 Type: filesandordirs; Name: "{userappdata}\{#AppName}"
 
 [Code]
@@ -102,48 +102,9 @@ begin
        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
-{ Качаем svcl.exe здесь, а не отдельной страницей мастера: PrepareToInstall
-  вызывается и при обычной, и при тихой установке (/VERYSILENT), а страницы
-  мастера в тихом режиме не показываются и их код не выполняется вовсе.
-  Непустая строка в Result прерывает установку и показывается пользователю. }
-function PrepareToInstall(var NeedsRestart: Boolean): String;
-var
-  Url: String;
-begin
-  Result := '';
-  if IsWin64 then
-    Url := '{#SvclUrl64}'
-  else
-    Url := '{#SvclUrl32}';
-  try
-    DownloadTemporaryFile(Url, 'svcl.zip', '', nil);
-  except
-    Result := FmtMessage(ExpandConstant('{cm:DownloadFail}'), [GetExceptionMessage]);
-  end;
-end;
-
-{ Распаковываем через Expand-Archive, а не встроенным ExtractArchive:
-  архивы NirSoft его декодер не принимает ("not an archive"). }
-procedure ExtractSvcl;
-var
-  ResultCode: Integer;
-  Cmd: String;
-begin
-  Cmd := '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "' +
-         'Expand-Archive -LiteralPath ''' + ExpandConstant('{tmp}\svcl.zip') + ''' ' +
-         '-DestinationPath ''' + ExpandConstant('{app}') + ''' -Force"';
-  Exec('powershell.exe', Cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-
-  if not FileExists(ExpandConstant('{app}\svcl.exe')) then
-    SuppressibleMsgBox(ExpandConstant('{cm:ExtractFail}'), mbCriticalError, MB_OK, IDOK);
-end;
-
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if CurStep = ssInstall then
-    StopRunningApp
-  else if CurStep = ssPostInstall then
-    ExtractSvcl;
+  if CurStep = ssInstall then StopRunningApp;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
