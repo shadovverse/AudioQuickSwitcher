@@ -113,6 +113,6 @@ var
 begin
   if CurUninstallStep = usUninstall then
     Exec('powershell.exe',
-         '-NoProfile -WindowStyle Hidden -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ''*AudioQuickSwitch*'' -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"',
+         '-NoProfile -WindowStyle Hidden -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ''*AudioQuickSwitch.ps1*'' -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"',
          '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
