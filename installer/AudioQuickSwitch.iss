@@ -72,7 +72,7 @@ Source: "vendor\svcl-x64\*";          DestDir: "{app}"; Flags: ignoreversion
 Source: "stop-running.ps1";            Flags: dontcopy
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\{#Launcher}"""; IconFilename: "{app}\mic_icon_on.ico"; WorkingDir: "{app}"
+Name: "{autoprograms}\{#AppName}"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\{#Launcher}"""; IconFilename: "{app}\app_icon.ico"; WorkingDir: "{app}"
 
 [Run]
 ; Обе строки превращаются в галочки на последней странице мастера.
