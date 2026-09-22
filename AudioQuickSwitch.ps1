@@ -37,6 +37,56 @@ public class Win11ColorTable : ProfessionalColorTable {
     public override Color SeparatorDark { get { return border; } }
     public override Color SeparatorLight { get { return border; } }
 }
+
+// Core Audio: громкость устройства вывода по умолчанию напрямую, без svcl.exe.
+// Методы объявлены строго в порядке vtable - пропускать или менять местами нельзя.
+[ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IAqsEndpointVolume {
+    void RegisterControlChangeNotify(IntPtr notify);
+    void UnregisterControlChangeNotify(IntPtr notify);
+    void GetChannelCount(out uint count);
+    void SetMasterVolumeLevel(float levelDb, ref Guid context);
+    void SetMasterVolumeLevelScalar(float level, ref Guid context);
+    void GetMasterVolumeLevel(out float levelDb);
+    void GetMasterVolumeLevelScalar(out float level);
+}
+
+[ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IAqsMMDevice {
+    void Activate(ref Guid iid, int clsCtx, IntPtr activationParams, [MarshalAs(UnmanagedType.IUnknown)] out object iface);
+}
+
+[ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IAqsMMDeviceEnumerator {
+    void EnumAudioEndpoints(int dataFlow, int stateMask, out IntPtr devices);
+    void GetDefaultAudioEndpoint(int dataFlow, int role, out IAqsMMDevice device);
+}
+
+[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+public class AqsMMDeviceEnumerator { }
+
+public static class AqsVolume {
+    // Устройство берём заново на каждый вызов: после переключения вывода
+    // закешированное указывало бы на старое. Стоит это микросекунды.
+    static IAqsEndpointVolume Endpoint() {
+        IAqsMMDeviceEnumerator en = (IAqsMMDeviceEnumerator)new AqsMMDeviceEnumerator();
+        IAqsMMDevice dev;
+        en.GetDefaultAudioEndpoint(0, 1, out dev);            // eRender, eMultimedia
+        Guid iid = typeof(IAqsEndpointVolume).GUID;
+        object o;
+        dev.Activate(ref iid, 23, IntPtr.Zero, out o);       // CLSCTX_ALL
+        return (IAqsEndpointVolume)o;
+    }
+    public static int Get() {
+        float v;
+        Endpoint().GetMasterVolumeLevelScalar(out v);
+        return (int)Math.Round(v * 100);
+    }
+    public static void Set(int percent) {
+        Guid ctx = Guid.Empty;
+        Endpoint().SetMasterVolumeLevelScalar(Math.Max(0, Math.Min(100, percent)) / 100f, ref ctx);
+    }
+}
 "@
 
 # ---------- НАСТРОЙКИ ----------
@@ -143,6 +193,7 @@ function Set-MenuTheme($menu) {
     $menu.ForeColor = $fg
     foreach ($it in $menu.Items) {
         if ($it -is [System.Windows.Forms.ToolStripMenuItem]) { $it.ForeColor = $fg }
+        if ($it -is [System.Windows.Forms.ToolStripControlHost]) { $it.Control.BackColor = $bg }
     }
     Set-RoundedCorners $menu
 }
@@ -320,6 +371,40 @@ function Build-Menu {
     }
 
     $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
+
+    # Громкость устройства по умолчанию - ползунок прямо в меню. Через Core Audio
+    # (класс AqsVolume выше), а не svcl.exe: ~2 мс на изменение против ~150 мс на
+    # запуск процесса, иначе ползунок дёргался бы при перетаскивании.
+    try {
+        $vol = [AqsVolume]::Get()
+        $volLabel = New-Object System.Windows.Forms.ToolStripMenuItem("Громкость: $vol%")
+        $volLabel.Enabled = $false
+        $menu.Items.Add($volLabel) | Out-Null
+
+        $track = New-Object System.Windows.Forms.TrackBar
+        $track.Minimum = 0
+        $track.Maximum = 100
+        $track.SmallChange = 1
+        $track.LargeChange = 10
+        $track.TickStyle = [System.Windows.Forms.TickStyle]::None
+        $track.AutoSize = $false
+        $track.Size = New-Object System.Drawing.Size(200, 26)
+        $track.Value = $vol
+        $track.Tag = $volLabel
+        $track.Add_ValueChanged({
+            param($s, $e)
+            try { [AqsVolume]::Set($s.Value) } catch {}
+            $s.Tag.Text = "Громкость: $($s.Value)%"
+        })
+        $menu.Items.Add((New-Object System.Windows.Forms.ToolStripControlHost($track))) | Out-Null
+
+        # меню собрано заранее - в момент открытия подтягиваем фактическую громкость
+        # (её могли поменять клавишами или в другом приложении)
+        $menu.Tag = $track
+        $menu.Add_Opening({ param($s, $e) try { $s.Tag.Value = [AqsVolume]::Get() } catch {} })
+
+        $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
+    } catch {}   # нет устройства вывода - просто без ползунка
 
     $listenStatus = if ($script:state.ListenOn) { "ВКЛ" } else { "ВЫКЛ" }
     $toggleItem = New-Object System.Windows.Forms.ToolStripMenuItem("Мониторинг: $listenStatus")
