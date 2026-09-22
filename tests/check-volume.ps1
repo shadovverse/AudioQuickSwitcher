@@ -16,6 +16,14 @@ try {
     $got = [AqsVolume]::Get()
     if ($got -ne $target) { throw "поставили $target%, прочитали $got%" }
     "OK: Get/Set сходятся ($orig% -> $target% -> $got%)"
+
+    # SetAsync: пачка значений подряд, как при быстром движении мыши.
+    # Применено должно быть последнее, промежуточные можно пропустить.
+    foreach ($v in @($orig, $target, $orig, $target, $orig, $target)) { [AqsVolume]::SetAsync($v) }
+    Start-Sleep -Milliseconds 300
+    $got = [AqsVolume]::Get()
+    if ($got -ne $target) { throw "SetAsync: последним было $target%, в итоге $got%" }
+    "OK: SetAsync применил последнее значение ($got%)"
 } finally {
     [AqsVolume]::Set($orig)
 }

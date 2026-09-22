@@ -86,6 +86,27 @@ public static class AqsVolume {
         Guid ctx = Guid.Empty;
         Endpoint().SetMasterVolumeLevelScalar(Math.Max(0, Math.Min(100, percent)) / 100f, ref ctx);
     }
+
+    // Реальное изменение громкости стоит ~8 мс: Windows синхронно рассылает
+    // уведомление всем, кто за ней следит. На потоке интерфейса ползунок из-за
+    // этого шёл рывками, поэтому ставим в фоне и только последнее значение -
+    // промежуточные при быстром движении мыши пропускаются.
+    static volatile int pending;
+    static int busy;
+    public static void SetAsync(int percent) {
+        pending = percent;
+        if (System.Threading.Interlocked.Exchange(ref busy, 1) == 0)
+            System.Threading.ThreadPool.QueueUserWorkItem(ApplyPending);
+    }
+    static void ApplyPending(object unused) {
+        while (true) {
+            int v = pending;
+            try { Set(v); } catch { }
+            System.Threading.Interlocked.Exchange(ref busy, 0);
+            if (pending == v) return;                                              // новых значений не пришло
+            if (System.Threading.Interlocked.Exchange(ref busy, 1) != 0) return;   // их уже подхватил другой поток
+        }
+    }
 }
 
 // Ползунок в стиле Windows 11: скруглённая дорожка, заполнение акцентным цветом,
@@ -95,29 +116,36 @@ public class AqsSlider : Control {
     public Color Track = Color.Gray;
     public Color ThumbFill = Color.FromArgb(69, 69, 69);
     public Color ThumbBorder = Color.FromArgb(84, 84, 84);
-    public event EventHandler ValueChanged;
     int val;
     bool dragging, hover;
-    const int R = 10;   // радиус бегунка
+    const int R = 10;      // радиус бегунка
+    const int NumW = 30;   // место справа под число процентов
 
     public AqsSlider() {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
                  ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
     }
 
+    // Value только показывает значение (при сборке меню и при его открытии).
+    // Громкость меняет лишь действие пользователя - UserSet, иначе пересборка меню
+    // могла бы затереть последнее движение ползунка, ещё не применённое в фоне.
     public int Value {
         get { return val; }
-        set {
-            int v = Math.Max(0, Math.Min(100, value));
-            if (v == val) return;
-            val = v;
-            Invalidate();
-            if (ValueChanged != null) ValueChanged(this, EventArgs.Empty);
-        }
+        set { val = Math.Max(0, Math.Min(100, value)); Invalidate(); }
+    }
+
+    // Громкость ставится прямо отсюда, в C#: обработчик на PowerShell на каждый
+    // пиксель движения стоил ~15 мс и давал рывки.
+    void UserSet(int v) {
+        v = Math.Max(0, Math.Min(100, v));
+        if (v == val) return;
+        val = v;
+        Invalidate();
+        AqsVolume.SetAsync(val);
     }
 
     int X0 { get { return R + 2; } }
-    int X1 { get { return Width - R - 2; } }
+    int X1 { get { return Width - R - 2 - NumW; } }
     int XOf(int v) { return X0 + (X1 - X0) * v / 100; }
     int ValueAt(int x) { return (int)Math.Round((x - X0) * 100.0 / Math.Max(1, X1 - X0)); }
 
@@ -139,17 +167,21 @@ public class AqsSlider : Control {
         using (Pen p = new Pen(ThumbBorder)) g.DrawEllipse(p, x - R, cy - R, 2 * R, 2 * R);
         int r = (hover || dragging) ? 7 : 6;
         using (Brush b = new SolidBrush(Accent)) g.FillEllipse(b, x - r, cy - r, 2 * r, 2 * r);
+        // число рисуем сами: подпись-пункт меню при каждом изменении заставляла
+        // всё меню пересчитывать раскладку
+        TextRenderer.DrawText(g, val.ToString(), Font, new Rectangle(Width - NumW, 0, NumW, Height),
+                              ForeColor, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
     }
 
     protected override void OnMouseDown(MouseEventArgs e) {
-        if (e.Button == MouseButtons.Left) { dragging = true; Capture = true; Value = ValueAt(e.X); }
+        if (e.Button == MouseButtons.Left) { dragging = true; Capture = true; UserSet(ValueAt(e.X)); }
         base.OnMouseDown(e);
     }
-    protected override void OnMouseMove(MouseEventArgs e) { if (dragging) Value = ValueAt(e.X); base.OnMouseMove(e); }
+    protected override void OnMouseMove(MouseEventArgs e) { if (dragging) UserSet(ValueAt(e.X)); base.OnMouseMove(e); }
     protected override void OnMouseUp(MouseEventArgs e) { dragging = false; Capture = false; Invalidate(); base.OnMouseUp(e); }
     protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
     protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
-    protected override void OnMouseWheel(MouseEventArgs e) { Value += e.Delta > 0 ? 2 : -2; base.OnMouseWheel(e); }
+    protected override void OnMouseWheel(MouseEventArgs e) { UserSet(val + (e.Delta > 0 ? 2 : -2)); base.OnMouseWheel(e); }
 }
 "@
 
@@ -274,6 +306,7 @@ function Set-MenuTheme($menu) {
             $it.Control.BackColor = $bg
             if ($it.Control -is [AqsSlider]) {
                 $it.Control.Accent      = Get-AccentColor $isDark
+                $it.Control.ForeColor   = $fg
                 $it.Control.Track       = if ($isDark) { [System.Drawing.Color]::FromArgb(153, 153, 153) } else { [System.Drawing.Color]::FromArgb(138, 138, 138) }
                 $it.Control.ThumbFill   = if ($isDark) { [System.Drawing.Color]::FromArgb(69, 69, 69) } else { [System.Drawing.Color]::White }
                 $it.Control.ThumbBorder = if ($isDark) { [System.Drawing.Color]::FromArgb(84, 84, 84) } else { [System.Drawing.Color]::FromArgb(229, 229, 229) }
@@ -462,19 +495,13 @@ function Build-Menu {
     # запуск процесса, иначе ползунок дёргался бы при перетаскивании.
     try {
         $vol = [AqsVolume]::Get()
-        $volLabel = New-Object System.Windows.Forms.ToolStripMenuItem("Громкость: $vol%")
+        $volLabel = New-Object System.Windows.Forms.ToolStripMenuItem("Громкость")
         $volLabel.Enabled = $false
         $menu.Items.Add($volLabel) | Out-Null
 
         $track = New-Object AqsSlider
         $track.Size = New-Object System.Drawing.Size(200, 28)
         $track.Value = $vol
-        $track.Tag = $volLabel
-        $track.Add_ValueChanged({
-            param($s, $e)
-            try { [AqsVolume]::Set($s.Value) } catch {}
-            $s.Tag.Text = "Громкость: $($s.Value)%"
-        })
         $menu.Items.Add((New-Object System.Windows.Forms.ToolStripControlHost($track))) | Out-Null
 
         # меню собрано заранее - в момент открытия подтягиваем фактическую громкость
