@@ -87,6 +87,70 @@ public static class AqsVolume {
         Endpoint().SetMasterVolumeLevelScalar(Math.Max(0, Math.Min(100, percent)) / 100f, ref ctx);
     }
 }
+
+// Ползунок в стиле Windows 11: скруглённая дорожка, заполнение акцентным цветом,
+// круглый бегунок с точкой. Штатный TrackBar рисует сама Windows - его не перекрасить.
+public class AqsSlider : Control {
+    public Color Accent = Color.FromArgb(0, 120, 215);
+    public Color Track = Color.Gray;
+    public Color ThumbFill = Color.FromArgb(69, 69, 69);
+    public Color ThumbBorder = Color.FromArgb(84, 84, 84);
+    public event EventHandler ValueChanged;
+    int val;
+    bool dragging, hover;
+    const int R = 10;   // радиус бегунка
+
+    public AqsSlider() {
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
+                 ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+    }
+
+    public int Value {
+        get { return val; }
+        set {
+            int v = Math.Max(0, Math.Min(100, value));
+            if (v == val) return;
+            val = v;
+            Invalidate();
+            if (ValueChanged != null) ValueChanged(this, EventArgs.Empty);
+        }
+    }
+
+    int X0 { get { return R + 2; } }
+    int X1 { get { return Width - R - 2; } }
+    int XOf(int v) { return X0 + (X1 - X0) * v / 100; }
+    int ValueAt(int x) { return (int)Math.Round((x - X0) * 100.0 / Math.Max(1, X1 - X0)); }
+
+    static Pen RoundPen(Color c) {
+        Pen p = new Pen(c, 4);
+        p.StartCap = System.Drawing.Drawing2D.LineCap.Round;
+        p.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+        return p;
+    }
+
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        g.Clear(BackColor);
+        int cy = Height / 2, x = XOf(val);
+        using (Pen p = RoundPen(Track)) g.DrawLine(p, X0, cy, X1, cy);
+        using (Pen p = RoundPen(Accent)) g.DrawLine(p, X0, cy, x, cy);
+        using (Brush b = new SolidBrush(ThumbFill)) g.FillEllipse(b, x - R, cy - R, 2 * R, 2 * R);
+        using (Pen p = new Pen(ThumbBorder)) g.DrawEllipse(p, x - R, cy - R, 2 * R, 2 * R);
+        int r = (hover || dragging) ? 7 : 6;
+        using (Brush b = new SolidBrush(Accent)) g.FillEllipse(b, x - r, cy - r, 2 * r, 2 * r);
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e) {
+        if (e.Button == MouseButtons.Left) { dragging = true; Capture = true; Value = ValueAt(e.X); }
+        base.OnMouseDown(e);
+    }
+    protected override void OnMouseMove(MouseEventArgs e) { if (dragging) Value = ValueAt(e.X); base.OnMouseMove(e); }
+    protected override void OnMouseUp(MouseEventArgs e) { dragging = false; Capture = false; Invalidate(); base.OnMouseUp(e); }
+    protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseWheel(MouseEventArgs e) { Value += e.Delta > 0 ? 2 : -2; base.OnMouseWheel(e); }
+}
 "@
 
 # ---------- НАСТРОЙКИ ----------
@@ -164,6 +228,19 @@ function Get-IsDarkTheme {
     }
 }
 
+# Акцентный цвет Windows. Берём из палитры оттенков, как это делает сама система:
+# в тёмной теме элементы заливаются светлым оттенком (Light2), в светлой - тёмным (Dark1).
+# AccentPalette - 8 оттенков по 4 байта R,G,B,A: 0-2 светлые, 3 основной, 4-6 тёмные.
+function Get-AccentColor($isDark) {
+    try {
+        $p = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Accent" -Name AccentPalette -ErrorAction Stop).AccentPalette
+        $i = if ($isDark) { 1 } else { 4 }
+        return [System.Drawing.Color]::FromArgb(255, $p[$i * 4], $p[$i * 4 + 1], $p[$i * 4 + 2])
+    } catch {
+        return [System.Drawing.Color]::FromArgb(255, 0, 120, 215)
+    }
+}
+
 function Set-RoundedCorners($ctrl) {
     $ctrl.Add_HandleCreated({
         param($s, $e)
@@ -193,7 +270,15 @@ function Set-MenuTheme($menu) {
     $menu.ForeColor = $fg
     foreach ($it in $menu.Items) {
         if ($it -is [System.Windows.Forms.ToolStripMenuItem]) { $it.ForeColor = $fg }
-        if ($it -is [System.Windows.Forms.ToolStripControlHost]) { $it.Control.BackColor = $bg }
+        if ($it -is [System.Windows.Forms.ToolStripControlHost]) {
+            $it.Control.BackColor = $bg
+            if ($it.Control -is [AqsSlider]) {
+                $it.Control.Accent      = Get-AccentColor $isDark
+                $it.Control.Track       = if ($isDark) { [System.Drawing.Color]::FromArgb(153, 153, 153) } else { [System.Drawing.Color]::FromArgb(138, 138, 138) }
+                $it.Control.ThumbFill   = if ($isDark) { [System.Drawing.Color]::FromArgb(69, 69, 69) } else { [System.Drawing.Color]::White }
+                $it.Control.ThumbBorder = if ($isDark) { [System.Drawing.Color]::FromArgb(84, 84, 84) } else { [System.Drawing.Color]::FromArgb(229, 229, 229) }
+            }
+        }
     }
     Set-RoundedCorners $menu
 }
@@ -381,14 +466,8 @@ function Build-Menu {
         $volLabel.Enabled = $false
         $menu.Items.Add($volLabel) | Out-Null
 
-        $track = New-Object System.Windows.Forms.TrackBar
-        $track.Minimum = 0
-        $track.Maximum = 100
-        $track.SmallChange = 1
-        $track.LargeChange = 10
-        $track.TickStyle = [System.Windows.Forms.TickStyle]::None
-        $track.AutoSize = $false
-        $track.Size = New-Object System.Drawing.Size(200, 26)
+        $track = New-Object AqsSlider
+        $track.Size = New-Object System.Drawing.Size(200, 28)
         $track.Value = $vol
         $track.Tag = $volLabel
         $track.Add_ValueChanged({
