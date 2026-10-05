@@ -84,7 +84,7 @@ public static class AqsVolume {
     }
     public static void Set(int percent) {
         Guid ctx = Guid.Empty;
-        Endpoint().SetMasterVolumeLevelScalar(Math.Max(0, Math.Min(100, percent)) / 100f, ref ctx);
+        Endpoint().SetMasterVolumeLevelScalar(percent / 100f, ref ctx);
     }
 
     // Реальное изменение громкости стоит ~8 мс: Windows синхронно рассылает
@@ -113,9 +113,7 @@ public static class AqsVolume {
 // круглый бегунок с точкой. Штатный TrackBar рисует сама Windows - его не перекрасить.
 public class AqsSlider : Control {
     public Color Accent = Color.FromArgb(0, 120, 215);
-    public Color Track = Color.Gray;
-    public Color ThumbFill = Color.FromArgb(69, 69, 69);
-    public Color ThumbBorder = Color.FromArgb(84, 84, 84);
+    public bool Dark;
     int val;
     bool dragging, hover;
     const int R = 10;      // радиус бегунка
@@ -131,7 +129,7 @@ public class AqsSlider : Control {
     // могла бы затереть последнее движение ползунка, ещё не применённое в фоне.
     public int Value {
         get { return val; }
-        set { val = Math.Max(0, Math.Min(100, value)); Invalidate(); }
+        set { val = value; Invalidate(); }
     }
 
     // Громкость ставится прямо отсюда, в C#: обработчик на PowerShell на каждый
@@ -161,10 +159,10 @@ public class AqsSlider : Control {
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         g.Clear(BackColor);
         int cy = Height / 2, x = XOf(val);
-        using (Pen p = RoundPen(Track)) g.DrawLine(p, X0, cy, X1, cy);
+        using (Pen p = RoundPen(Dark ? Color.FromArgb(153, 153, 153) : Color.FromArgb(138, 138, 138))) g.DrawLine(p, X0, cy, X1, cy);
         using (Pen p = RoundPen(Accent)) g.DrawLine(p, X0, cy, x, cy);
-        using (Brush b = new SolidBrush(ThumbFill)) g.FillEllipse(b, x - R, cy - R, 2 * R, 2 * R);
-        using (Pen p = new Pen(ThumbBorder)) g.DrawEllipse(p, x - R, cy - R, 2 * R, 2 * R);
+        using (Brush b = new SolidBrush(Dark ? Color.FromArgb(69, 69, 69) : Color.White)) g.FillEllipse(b, x - R, cy - R, 2 * R, 2 * R);
+        using (Pen p = new Pen(Dark ? Color.FromArgb(84, 84, 84) : Color.FromArgb(229, 229, 229))) g.DrawEllipse(p, x - R, cy - R, 2 * R, 2 * R);
         int r = (hover || dragging) ? 7 : 6;
         using (Brush b = new SolidBrush(Accent)) g.FillEllipse(b, x - r, cy - r, 2 * r, 2 * r);
         // число рисуем сами: подпись-пункт меню при каждом изменении заставляла
@@ -302,15 +300,10 @@ function Set-MenuTheme($menu) {
     $menu.ForeColor = $fg
     foreach ($it in $menu.Items) {
         if ($it -is [System.Windows.Forms.ToolStripMenuItem]) { $it.ForeColor = $fg }
-        if ($it -is [System.Windows.Forms.ToolStripControlHost]) {
-            $it.Control.BackColor = $bg
-            if ($it.Control -is [AqsSlider]) {
-                $it.Control.Accent      = Get-AccentColor $isDark
-                $it.Control.ForeColor   = $fg
-                $it.Control.Track       = if ($isDark) { [System.Drawing.Color]::FromArgb(153, 153, 153) } else { [System.Drawing.Color]::FromArgb(138, 138, 138) }
-                $it.Control.ThumbFill   = if ($isDark) { [System.Drawing.Color]::FromArgb(69, 69, 69) } else { [System.Drawing.Color]::White }
-                $it.Control.ThumbBorder = if ($isDark) { [System.Drawing.Color]::FromArgb(84, 84, 84) } else { [System.Drawing.Color]::FromArgb(229, 229, 229) }
-            }
+        if ($it.Control -is [AqsSlider]) {
+            $s = $it.Control
+            $s.BackColor = $bg; $s.ForeColor = $fg; $s.Dark = $isDark
+            $s.Accent = Get-AccentColor $isDark
         }
     }
     Set-RoundedCorners $menu
