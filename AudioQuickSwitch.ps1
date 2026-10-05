@@ -412,6 +412,13 @@ function Start-Voicemeeter {
 }
 
 function Set-OutputDevice($deviceName) {
+    # Громкость общая на все устройства: новое получает уровень текущего. Windows
+    # держит у каждого устройства свою, и ползунок "прыгал" при переключении.
+    # Читаем до всего остального: если ниже гасится Voicemeeter, Windows сама
+    # перекидывает вывод на железо, и прочиталась бы громкость чужого устройства.
+    $vol = $null
+    try { $vol = [AqsVolume]::Get() } catch {}
+
     if ($deviceName -match "Voicemeeter") {
         # даём Voicemeeter время создать свои аудио-эндпоинты перед переключением
         if (Start-Voicemeeter) { Start-Sleep -Milliseconds 1500 }
@@ -424,6 +431,7 @@ function Set-OutputDevice($deviceName) {
     # /SetDefault уже отдаёт новое устройство. Прежний поллинг только добавлял
     # лишнюю секунду на каждое переключение.
     & $svcl /SetDefault $deviceName all
+    if ($null -ne $vol) { try { [AqsVolume]::Set($vol) } catch {} }
     $notifyIcon.ShowBalloonTip(1200, "Аудио", "Устройство вывода: $deviceName", [System.Windows.Forms.ToolTipIcon]::Info)
     # WinForms не гарантирует, что Closed сработает после Click, а не до него:
     # пересобираем явно, чтобы галочка гарантированно встала на новое устройство
