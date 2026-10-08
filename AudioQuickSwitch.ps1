@@ -523,10 +523,10 @@ function Build-Menu {
     } catch {}   # нет устройства вывода - просто без ползунка
 
     $script:toggleItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    Update-Icon   # ставит надпись "Мониторинг: ВКЛ/ВЫКЛ" (и заодно значок - тот же самый)
     $script:toggleItem.Enabled = $script:state.ListenOn -or $script:defaultOutput -notmatch "Voicemeeter"
     $script:toggleItem.Add_Click({ Toggle-Listen })
     $menu.Items.Add($script:toggleItem) | Out-Null
+    Update-Icon   # надпись "Мониторинг: ..." ставит она же (заодно переставляет тот же значок)
 
     # Штатный список устройств Windows (mmsys.cpl, вкладка "Воспроизведение") -
     # в Windows 11 он спрятан глубоко в параметрах, отсюда до него один клик.
