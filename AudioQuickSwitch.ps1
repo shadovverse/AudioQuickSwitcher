@@ -362,6 +362,13 @@ function Update-Icon {
 }
 
 function Toggle-Listen {
+    # С Voicemeeter мониторинг не включаем - выключить можно всегда.
+    # ponytail: устройство берётся из последней сборки меню; если вывод переключили
+    # мимо утилиты, блокировка заработает после следующего открытия меню.
+    if (-not $script:state.ListenOn -and $script:defaultOutput -match "Voicemeeter") {
+        $notifyIcon.ShowBalloonTip(1200, "Аудио", "Мониторинг недоступен, пока вывод на Voicemeeter", [System.Windows.Forms.ToolTipIcon]::Info)
+        return
+    }
     $script:state.ListenOn = -not $script:state.ListenOn
     $val = if ($script:state.ListenOn) { 1 } else { 0 }
     & $svcl /SetListenToThisDevice DefaultCaptureDevice $val
@@ -413,6 +420,7 @@ function Set-OutputDevice($deviceName) {
     try { $vol = [AqsVolume]::Get() } catch {}
 
     if ($deviceName -match "Voicemeeter") {
+        Disable-Listening-Silently; Update-Icon   # с Voicemeeter мониторинг запрещён
         # даём Voicemeeter время создать свои аудио-эндпоинты перед переключением
         if (Start-Voicemeeter) { Start-Sleep -Milliseconds 1500 }
     } elseif ($voicemeeterProcessName) {
@@ -515,6 +523,7 @@ function Build-Menu {
 
     $listenStatus = if ($script:state.ListenOn) { "ВКЛ" } else { "ВЫКЛ" }
     $toggleItem = New-Object System.Windows.Forms.ToolStripMenuItem("Мониторинг: $listenStatus")
+    $toggleItem.Enabled = $script:state.ListenOn -or $script:defaultOutput -notmatch "Voicemeeter"
     $toggleItem.Add_Click({ Toggle-Listen })
     $menu.Items.Add($toggleItem) | Out-Null
 
