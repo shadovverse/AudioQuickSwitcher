@@ -359,6 +359,7 @@ function Update-Icon {
     $notifyIcon.Icon = if ($script:state.ListenOn) { $iconOn } else { $iconOff }
     $status = if ($script:state.ListenOn) { "ВКЛ" } else { "ВЫКЛ" }
     $notifyIcon.Text = "Прослушивание: $status"
+    if ($script:toggleItem) { $script:toggleItem.Text = "Мониторинг: $status" }
 }
 
 function Toggle-Listen {
@@ -370,15 +371,15 @@ function Toggle-Listen {
         return
     }
     $script:state.ListenOn = -not $script:state.ListenOn
+    # Значок и пункт меню меняем ДО svcl: сам вызов стоит ~180 мс, и раньше значок
+    # переключался с этой задержкой. Пересобирать всё меню (~200 мс, svcl /sjson)
+    # ради одной надписи тоже незачем - Update-Icon правит её сам.
+    Update-Icon
     $val = if ($script:state.ListenOn) { 1 } else { 0 }
     & $svcl /SetListenToThisDevice DefaultCaptureDevice $val
     Save-State $script:state
-    Update-Icon
     $status = if ($script:state.ListenOn) { "включено" } else { "выключено" }
     $notifyIcon.ShowBalloonTip(1200, "Аудио", "Прослушивание микрофона $status", [System.Windows.Forms.ToolTipIcon]::Info)
-    # левый клик меню не открывает, значит событие Closed не сработает -
-    # пересобираем сами, иначе пункт "Мониторинг: ..." останется со старым статусом
-    Refresh-Menu
 }
 
 function Disable-Listening-Silently {
@@ -525,6 +526,7 @@ function Build-Menu {
     $toggleItem = New-Object System.Windows.Forms.ToolStripMenuItem("Мониторинг: $listenStatus")
     $toggleItem.Enabled = $script:state.ListenOn -or $script:defaultOutput -notmatch "Voicemeeter"
     $toggleItem.Add_Click({ Toggle-Listen })
+    $script:toggleItem = $toggleItem
     $menu.Items.Add($toggleItem) | Out-Null
 
     # Штатный список устройств Windows (mmsys.cpl, вкладка "Воспроизведение") -
