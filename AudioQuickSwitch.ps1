@@ -435,9 +435,7 @@ function Set-OutputDevice($deviceName) {
     & $svcl /SetDefault $deviceName all
     if ($null -ne $vol) { try { [AqsVolume]::Set($vol) } catch {} }
     $notifyIcon.ShowBalloonTip(1200, "Аудио", "Устройство вывода: $deviceName", [System.Windows.Forms.ToolTipIcon]::Info)
-    # WinForms не гарантирует, что Closed сработает после Click, а не до него:
-    # пересобираем явно, чтобы галочка гарантированно встала на новое устройство
-    Refresh-Menu
+    # меню пересоберётся само после клика (отложенный Closed в Refresh-Menu)
 }
 
 function Build-Menu {
@@ -556,7 +554,11 @@ function Refresh-Menu {
     # из события Closed, когда прежнее меню ещё закрывается, и Dispose() на нём
     # роняет приложение. Так же вело себя и прежнее пересоздание по клику.
     $menu = Build-Menu
-    $menu.Add_Closed({ Refresh-Menu })
+    # При клике по пункту WinForms сначала закрывает меню (Closed), и только потом
+    # вызывает Click. Синхронная пересборка тут (~200 мс) задерживала сам клик:
+    # мониторинг выключался через ~420 мс. BeginInvoke откладывает её до конца клика -
+    # заодно галочка устройства гарантированно ставится уже после переключения.
+    $menu.Add_Closed({ param($s) $s.BeginInvoke([Action]{ Refresh-Menu }) | Out-Null })
     $notifyIcon.ContextMenuStrip = $menu
 }
 
