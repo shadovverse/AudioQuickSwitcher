@@ -559,6 +559,16 @@ function Refresh-Menu {
     # мониторинг выключался через ~420 мс. BeginInvoke откладывает её до конца клика -
     # заодно галочка устройства гарантированно ставится уже после переключения.
     $menu.Add_Closed({ param($s) $s.BeginInvoke([Action]{ Refresh-Menu }) | Out-Null })
+    # WinForms ставит низ меню на точку клика и ограничивает его экраном, а не
+    # рабочей областью - меню заходит на панель задач и может уйти под неё.
+    # Двигаем в рабочую область: она сама учитывает высоту панели (и компактную).
+    $menu.Add_Opened({
+        param($s)
+        $wa = [System.Windows.Forms.Screen]::FromPoint($s.Location).WorkingArea
+        $s.Location = New-Object System.Drawing.Point(
+            [Math]::Max($wa.Left, [Math]::Min($s.Left, $wa.Right - $s.Width)),
+            [Math]::Max($wa.Top, [Math]::Min($s.Top, $wa.Bottom - $s.Height)))
+    })
     $notifyIcon.ContextMenuStrip = $menu
 }
 
