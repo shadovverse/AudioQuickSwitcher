@@ -18,6 +18,8 @@ using System.Windows.Forms;
 public class DwmHelper {
     [DllImport("dwmapi.dll")]
     public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hwnd);
 }
 
 public class Win11ColorTable : ProfessionalColorTable {
@@ -559,17 +561,7 @@ function Refresh-Menu {
     # мониторинг выключался через ~420 мс. BeginInvoke откладывает её до конца клика -
     # заодно галочка устройства гарантированно ставится уже после переключения.
     $menu.Add_Closed({ param($s) $s.BeginInvoke([Action]{ Refresh-Menu }) | Out-Null })
-    # WinForms ставит низ меню на точку клика и ограничивает его экраном, а не
-    # рабочей областью - меню заходит на панель задач и может уйти под неё.
-    # Двигаем в рабочую область: она сама учитывает высоту панели (и компактную).
-    $menu.Add_Opened({
-        param($s)
-        $wa = [System.Windows.Forms.Screen]::FromPoint($s.Location).WorkingArea
-        $s.Location = New-Object System.Drawing.Point(
-            [Math]::Max($wa.Left, [Math]::Min($s.Left, $wa.Right - $s.Width)),
-            [Math]::Max($wa.Top, [Math]::Min($s.Top, $wa.Bottom - $s.Height)))
-    })
-    $notifyIcon.ContextMenuStrip = $menu
+    $script:menu = $menu
 }
 
 Refresh-Menu
@@ -584,7 +576,21 @@ $notifyIcon.Add_MouseDown({
     if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
         Toggle-Listen
     }
-    # правый клик ничего не делает: Windows сама покажет готовый ContextMenuStrip
+})
+
+# Меню показываем сами, а не через NotifyIcon.ContextMenuStrip: тот ставит низ меню
+# на точку клика (внутрь панели задач) и ограничивает его экраном, а не рабочей
+# областью - меню заходило на панель на 28 px и пряталось под ней. Обычный Show
+# ограничивает рабочей областью (WorkingAreaConstrained) ещё до показа, без
+# мерцания, и сам учитывает высоту панели, в том числе компактной.
+# SetForegroundWindow на скрытое окно значка - так же делает сам NotifyIcon,
+# иначе меню не закрывается кликом мимо.
+$trayWindow = $notifyIcon.GetType().GetField('window', [Reflection.BindingFlags]'NonPublic,Instance').GetValue($notifyIcon)
+$notifyIcon.Add_MouseUp({
+    param($s, $e)
+    if ($e.Button -ne [System.Windows.Forms.MouseButtons]::Right) { return }
+    [DwmHelper]::SetForegroundWindow($trayWindow.Handle) | Out-Null
+    $script:menu.Show([System.Windows.Forms.Cursor]::Position, [System.Windows.Forms.ToolStripDropDownDirection]::AboveLeft)
 })
 
 Update-Icon
