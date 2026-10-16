@@ -20,6 +20,20 @@ public class DwmHelper {
     public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hwnd);
+
+    // Левый край значка в трее (экранные координаты), -1 если Windows не отдала.
+    [StructLayout(LayoutKind.Sequential)]
+    struct NotifyIconId { public int cbSize; public IntPtr hWnd; public uint uID; public Guid guidItem; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct Rect { public int Left, Top, Right, Bottom; }
+    [DllImport("shell32.dll")]
+    static extern int Shell_NotifyIconGetRect(ref NotifyIconId id, out Rect r);
+    public static int TrayIconLeft(IntPtr hwnd, int id) {
+        NotifyIconId n = new NotifyIconId();
+        n.cbSize = Marshal.SizeOf(n); n.hWnd = hwnd; n.uID = (uint)id;
+        Rect r;
+        return Shell_NotifyIconGetRect(ref n, out r) == 0 ? r.Left : -1;
+    }
 }
 
 // Подсветку пункта рисуем сами. Штатная: без EnableVisualStyles (PowerShell его не
@@ -31,7 +45,10 @@ public class Win11Renderer : ToolStripProfessionalRenderer {
     public Win11Renderer(ProfessionalColorTable t) : base(t) { }
     protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e) {
         if (!e.Item.Enabled || !e.Item.Selected) return;
-        Rectangle r = new Rectangle(4, 1, e.Item.Width - 8, e.Item.Height - 2);
+        // пункты-устройства у WinForms шире видимой части меню (свой Padding) -
+        // без ограничения правое скругление уходило за рамку и обрезалось
+        int w = Math.Min(e.Item.Width, e.ToolStrip.DisplayRectangle.Right - e.Item.Bounds.X);
+        Rectangle r = new Rectangle(4, 1, w - 8, e.Item.Height - 2);
         const int d = 8;   // диаметр скругления
         using (System.Drawing.Drawing2D.GraphicsPath p = new System.Drawing.Drawing2D.GraphicsPath())
         using (Brush b = new SolidBrush(ColorTable.MenuItemSelected)) {
@@ -143,7 +160,14 @@ public class AqsSlider : Control {
     int val;
     bool dragging, hover;
     const int R = 10;      // радиус бегунка
-    const int NumW = 30;   // место справа под число процентов
+    // Дорожка - ровно по краям текста пунктов меню (отступ LineIn от краёв контрола),
+    // бегунок ходит внутри неё и за её концы не вылезает: слева и справа поровну.
+    const int LineIn = 4;
+    const int LabelH = 22; // строка подписи "Громкость: N %" над дорожкой
+    // Подпись рисуем сами, внутри контрола: отдельный пункт меню с меняющимся
+    // текстом при каждом шаге заставлял всё меню пересчитывать раскладку.
+    const string Label = "Громкость:";
+    const int LabelX = 3;  // замерено: так текст встаёт ровно под "Устройства вывода:"
 
     public AqsSlider() {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
@@ -168,8 +192,8 @@ public class AqsSlider : Control {
         AqsVolume.SetAsync(val);
     }
 
-    int X0 { get { return R + 2; } }
-    int X1 { get { return Width - R - 2 - NumW; } }
+    int X0 { get { return LineIn + R; } }
+    int X1 { get { return Width - LineIn - R; } }
     int XOf(int v) { return X0 + (X1 - X0) * v / 100; }
     int ValueAt(int x) { return (int)Math.Round((x - X0) * 100.0 / Math.Max(1, X1 - X0)); }
 
@@ -184,17 +208,17 @@ public class AqsSlider : Control {
         Graphics g = e.Graphics;
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         g.Clear(BackColor);
-        int cy = Height / 2, x = XOf(val);
-        using (Pen p = RoundPen(Dark ? Color.FromArgb(153, 153, 153) : Color.FromArgb(138, 138, 138))) g.DrawLine(p, X0, cy, X1, cy);
-        using (Pen p = RoundPen(Accent)) g.DrawLine(p, X0, cy, x, cy);
+        int cy = LabelH + (Height - LabelH) / 2, x = XOf(val);
+        using (Pen p = RoundPen(Dark ? Color.FromArgb(153, 153, 153) : Color.FromArgb(138, 138, 138))) g.DrawLine(p, LineIn + 2, cy, Width - LineIn - 2, cy);   // +2 - круглый конец пера
+        using (Pen p = RoundPen(Accent)) g.DrawLine(p, LineIn + 2, cy, x, cy);
         using (Brush b = new SolidBrush(Dark ? Color.FromArgb(69, 69, 69) : Color.White)) g.FillEllipse(b, x - R, cy - R, 2 * R, 2 * R);
         using (Pen p = new Pen(Dark ? Color.FromArgb(84, 84, 84) : Color.FromArgb(229, 229, 229))) g.DrawEllipse(p, x - R, cy - R, 2 * R, 2 * R);
         int r = (hover || dragging) ? 7 : 6;
         using (Brush b = new SolidBrush(Accent)) g.FillEllipse(b, x - r, cy - r, 2 * r, 2 * r);
-        // число рисуем сами: подпись-пункт меню при каждом изменении заставляла
-        // всё меню пересчитывать раскладку
-        TextRenderer.DrawText(g, val.ToString(), Font, new Rectangle(Width - NumW, 0, NumW, Height),
-                              ForeColor, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+        TextFormatFlags f = TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter;
+        TextRenderer.DrawText(g, Label, Font, new Rectangle(LabelX, 0, Width, LabelH), SystemColors.GrayText, f);
+        int nx = LabelX + TextRenderer.MeasureText(g, Label, Font, Size.Empty, f).Width + 4;
+        TextRenderer.DrawText(g, val + " %", Font, new Rectangle(nx, 0, Width, LabelH), ForeColor, f);
     }
 
     protected override void OnMouseDown(MouseEventArgs e) {
@@ -373,6 +397,7 @@ function Set-RoundedCorners($ctrl) {
 
 function Set-MenuTheme($menu) {
     $isDark = Get-IsDarkTheme
+    $script:menuDark = $isDark
     if ($isDark) {
         $bg     = [System.Drawing.Color]::FromArgb(255, 32, 32, 32)
         $hover  = [System.Drawing.Color]::FromArgb(255, 60, 60, 60)
@@ -476,8 +501,7 @@ function Toggle-Listen {
     $val = if ($script:state.ListenOn) { 1 } else { 0 }
     & $svcl /SetListenToThisDevice DefaultCaptureDevice $val
     Save-State $script:state
-    $status = if ($script:state.ListenOn) { "ВКЛ" } else { "ВЫКЛ" }
-    Show-Toast "Мониторинг микрофона: $status"
+    # уведомления нет: состояние и так видно по значку
 }
 
 function Disable-Listening-Silently {
@@ -511,6 +535,11 @@ function Start-Voicemeeter {
 }
 
 function Set-OutputDevice($deviceName) {
+    # Сразу, а не при пересборке меню: по нему Toggle-Listen запрещает мониторинг
+    # с Voicemeeter, а клик по значку сразу после выбора Voicemeeter (пока тот
+    # запускается) иначе видел старое устройство и мониторинг включался.
+    $script:defaultOutput = $deviceName
+
     # Громкость общая на все устройства: новое получает уровень текущего. Windows
     # держит у каждого устройства свою, и ползунок "прыгал" при переключении.
     # Читаем до всего остального: если ниже гасится Voicemeeter, Windows сама
@@ -601,14 +630,11 @@ function Build-Menu {
     # запуск процесса, иначе ползунок дёргался бы при перетаскивании.
     try {
         $vol = [AqsVolume]::Get()
-        $volLabel = New-Object System.Windows.Forms.ToolStripMenuItem("Громкость")
-        $volLabel.Enabled = $false
-        $menu.Items.Add($volLabel) | Out-Null
-
         $track = New-Object AqsSlider
-        $track.Size = New-Object System.Drawing.Size(200, 28)
+        $track.Size = New-Object System.Drawing.Size(100, 50)   # ширина - ниже, после сборки меню
         $track.Value = $vol
-        $menu.Items.Add((New-Object System.Windows.Forms.ToolStripControlHost($track))) | Out-Null
+        $volHost = New-Object System.Windows.Forms.ToolStripControlHost($track)
+        $menu.Items.Add($volHost) | Out-Null
 
         # меню собрано заранее - в момент открытия подтягиваем фактическую громкость
         # (её могли поменять клавишами или в другом приложении)
@@ -639,6 +665,13 @@ function Build-Menu {
     $menu.Items.Add($exitItem) | Out-Null
 
     Set-MenuTheme $menu
+    # Ширину меню задаёт самый длинный пункт; ползунок растягиваем на неё целиком,
+    # с тем же отступом справа, что и слева. Меню фиксируем (AutoSize off): иначе
+    # WinForms прибавил бы к ползунку запас под стрелку подменю и расширил меню.
+    if ($volHost) {
+        $menu.AutoSize = $false
+        $track.Width = $menu.Width - 2 * $volHost.Bounds.X
+    }
 
     return $menu
 }
@@ -657,6 +690,11 @@ function Refresh-Menu {
     # мониторинг выключался через ~420 мс. BeginInvoke откладывает её до конца клика -
     # заодно галочка устройства гарантированно ставится уже после переключения.
     $menu.Add_Closed({ param($s) $s.BeginInvoke([Action]{ Refresh-Menu }) | Out-Null })
+    # меню собрано заранее: если тему Windows переключили после сборки, перекрашиваем
+    # при открытии (только цвета, без svcl - пара миллисекунд)
+    $menu.Add_Opening({ param($s, $e) if ((Get-IsDarkTheme) -ne $script:menuDark) { Set-MenuTheme $s } })
+    # internal-свойство; почему выключено - см. показ меню по правому клику
+    $menu.GetType().GetProperty('WorkingAreaConstrained', [Reflection.BindingFlags]'NonPublic,Instance').SetValue($menu, $false)
     $script:menu = $menu
 }
 
@@ -682,11 +720,23 @@ $notifyIcon.Add_MouseDown({
 # SetForegroundWindow на скрытое окно значка - так же делает сам NotifyIcon,
 # иначе меню не закрывается кликом мимо.
 $trayWindow = $notifyIcon.GetType().GetField('window', [Reflection.BindingFlags]'NonPublic,Instance').GetValue($notifyIcon)
+$trayIconId = $notifyIcon.GetType().GetField('id', [Reflection.BindingFlags]'NonPublic,Instance').GetValue($notifyIcon)
 $notifyIcon.Add_MouseUp({
     param($s, $e)
     if ($e.Button -ne [System.Windows.Forms.MouseButtons]::Right) { return }
     [DwmHelper]::SetForegroundWindow($trayWindow.Handle) | Out-Null
-    $script:menu.Show([System.Windows.Forms.Cursor]::Position, [System.Windows.Forms.ToolStripDropDownDirection]::AboveLeft)
+    # как у других значков трея (Telegram и т.п.): левый край - по левому краю
+    # значка, низ - на 1 px ниже рабочей области: поверх светлой линии по верхнему
+    # краю панели задач. Иначе она шла вплотную к светлой рамке меню и выглядела
+    # щелью в 1 px. Поэтому WorkingAreaConstrained выключен (иначе WinForms
+    # вернёт меню выше), а правый край экрана проверяем сами.
+    $c  = [System.Windows.Forms.Cursor]::Position
+    $wa = [System.Windows.Forms.Screen]::FromPoint($c).WorkingArea
+    $x  = [DwmHelper]::TrayIconLeft($trayWindow.Handle, $trayIconId)
+    if ($x -lt 0) { $x = $c.X }   # не вышло узнать значок - по курсору
+    $x  = [Math]::Max($wa.Left, [Math]::Min($x, $wa.Right - $script:menu.Width))
+    $y  = if ($c.Y -ge $wa.Bottom) { $wa.Bottom + 1 } else { $c.Y }   # панель не снизу (автоскрытие) - по курсору
+    $script:menu.Show((New-Object System.Drawing.Point($x, $y)), [System.Windows.Forms.ToolStripDropDownDirection]::AboveRight)
 })
 
 Update-Icon
