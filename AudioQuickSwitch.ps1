@@ -22,12 +22,27 @@ public class DwmHelper {
     public static extern bool SetForegroundWindow(IntPtr hwnd);
 }
 
-// Неактивные пункты (заголовки "Устройства вывода:", "Громкость") штатный
-// рендерер при наведении обводит рамкой выделения - не рисуем им фон вовсе.
+// Подсветку пункта рисуем сами. Штатная: без EnableVisualStyles (PowerShell его не
+// зовёт) берёт системный светло-голубой вместо цветов таблицы - белый текст на нём
+// не читается; прямоугольник до самых краёв давал острые углы у скруглённого меню;
+// неактивные заголовки обводила рамкой. Здесь - как в Windows 11: скруглённая
+// плашка с отступом от краёв, у неактивных пунктов ничего.
 public class Win11Renderer : ToolStripProfessionalRenderer {
     public Win11Renderer(ProfessionalColorTable t) : base(t) { }
     protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e) {
-        if (e.Item.Enabled) base.OnRenderMenuItemBackground(e);
+        if (!e.Item.Enabled || !e.Item.Selected) return;
+        Rectangle r = new Rectangle(4, 1, e.Item.Width - 8, e.Item.Height - 2);
+        const int d = 8;   // диаметр скругления
+        using (System.Drawing.Drawing2D.GraphicsPath p = new System.Drawing.Drawing2D.GraphicsPath())
+        using (Brush b = new SolidBrush(ColorTable.MenuItemSelected)) {
+            p.AddArc(r.X, r.Y, d, d, 180, 90);
+            p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            p.CloseFigure();
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            e.Graphics.FillPath(b, p);
+        }
     }
 }
 
