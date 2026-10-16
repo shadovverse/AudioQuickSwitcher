@@ -452,8 +452,8 @@ function Toggle-Listen {
     $val = if ($script:state.ListenOn) { 1 } else { 0 }
     & $svcl /SetListenToThisDevice DefaultCaptureDevice $val
     Save-State $script:state
-    $status = if ($script:state.ListenOn) { "включено" } else { "выключено" }
-    Show-Toast "Прослушивание микрофона $status"
+    $status = if ($script:state.ListenOn) { "ВКЛ" } else { "ВЫКЛ" }
+    Show-Toast "Мониторинг микрофона: $status"
 }
 
 function Disable-Listening-Silently {
@@ -508,7 +508,7 @@ function Set-OutputDevice($deviceName) {
     # лишнюю секунду на каждое переключение.
     & $svcl /SetDefault $deviceName all
     if ($null -ne $vol) { try { [AqsVolume]::Set($vol) } catch {} }
-    Show-Toast "Устройство вывода: $deviceName"
+    Show-Toast "Устройство: $deviceName"
     # меню пересоберётся само после клика (отложенный Closed в Refresh-Menu)
 }
 

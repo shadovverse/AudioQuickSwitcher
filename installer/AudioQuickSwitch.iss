@@ -11,10 +11,12 @@
 ; installer/vendor/svcl-x64 (в репозиторий не коммитится).
 
 #define AppName        "AudioQuickSwitch"
-#define AppVersion     "1.0.0"
+#define AppVersion     "1.1.0"
 #define AppPublisher   "shadovverse"
 #define AppURL         "https://github.com/shadovverse/fast_audioswitcher"
-#define Launcher       "Запустить_скрытно.vbs"
+#define Launcher       "start-hidden.vbs"
+; до 1.0.0 включительно лаунчер назывался так - убираем при обновлении
+#define OldLauncher    "Запустить_скрытно.vbs"
 
 [Setup]
 AppId={{D9ED2889-A9F8-44B8-9D0E-4D2689043DA9}
@@ -84,11 +86,22 @@ Filename: "{sys}\wscript.exe"; Parameters: """{app}\{#Launcher}"""; WorkingDir: 
 [Registry]
 ; само значение создаёт галочка выше; здесь только уборка при удалении
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "{#AppName}"; Flags: uninsdeletevalue
+; обновление: если автозапуск уже включён, переписываем его на новое имя лаунчера,
+; иначе он указывал бы на удалённый {#OldLauncher}
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#AppName}"; ValueData: """{sys}\wscript.exe"" ""{app}\{#Launcher}"""; Check: AutostartEnabled
+
+[InstallDelete]
+Type: files; Name: "{app}\{#OldLauncher}"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{userappdata}\{#AppName}"
 
 [Code]
+
+function AutostartEnabled: Boolean;
+begin
+  Result := RegValueExists(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#AppName}');
+end;
 
 { Гасим запущенный экземпляр: иначе при обновлении файлы заняты, а при удалении
   в трее остаётся живой значок от снесённой программы. }
