@@ -22,6 +22,15 @@ public class DwmHelper {
     public static extern bool SetForegroundWindow(IntPtr hwnd);
 }
 
+// Неактивные пункты (заголовки "Устройства вывода:", "Громкость") штатный
+// рендерер при наведении обводит рамкой выделения - не рисуем им фон вовсе.
+public class Win11Renderer : ToolStripProfessionalRenderer {
+    public Win11Renderer(ProfessionalColorTable t) : base(t) { }
+    protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e) {
+        if (e.Item.Enabled) base.OnRenderMenuItemBackground(e);
+    }
+}
+
 public class Win11ColorTable : ProfessionalColorTable {
     private Color bg, hover, border;
     public Win11ColorTable(Color bg, Color hover, Color border) {
@@ -361,7 +370,7 @@ function Set-MenuTheme($menu) {
         $fg     = [System.Drawing.Color]::Black
     }
     $colorTable = New-Object Win11ColorTable($bg, $hover, $border)
-    $menu.Renderer = New-Object System.Windows.Forms.ToolStripProfessionalRenderer($colorTable)
+    $menu.Renderer = New-Object Win11Renderer($colorTable)
     $menu.BackColor = $bg
     $menu.ForeColor = $fg
     foreach ($it in $menu.Items) {
