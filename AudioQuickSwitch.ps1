@@ -183,6 +183,70 @@ public class AqsSlider : Control {
     protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
     protected override void OnMouseWheel(MouseEventArgs e) { UserSet(val + (e.Delta > 0 ? 2 : -2)); base.OnMouseWheel(e); }
 }
+
+// Своё уведомление вместо ShowBalloonTip. Системное облачко подписано "Windows
+// PowerShell" (процесс - powershell.exe), а со своим именем Windows не даёт ему
+// иконку; тосты WinRT со своим AppUserModelID не показываются вовсе (проверено
+// реестром, ярлыком с AUMID, ShowInActionCenter). Окно без активации и без
+// кнопки на панели задач, над треем, закрывается само или по клику.
+public class AqsToast : Form {
+    static AqsToast current;
+    Icon logo; string title, text; bool dark;
+    Timer timer = new Timer();
+    const int Pad = 16, LogoSize = 32;
+
+    AqsToast(Icon logo, string title, string text, bool dark) {
+        this.logo = logo; this.title = title; this.text = text; this.dark = dark;
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        StartPosition = FormStartPosition.Manual;
+        Font = SystemFonts.MessageBoxFont;
+        BackColor = dark ? Color.FromArgb(32, 32, 32) : Color.FromArgb(249, 249, 249);
+        int textW = Math.Max(TextRenderer.MeasureText(title, new Font(Font, FontStyle.Bold)).Width,
+                             TextRenderer.MeasureText(text, Font).Width);
+        ClientSize = new Size(Pad + LogoSize + 12 + textW + Pad, 64);
+        timer.Interval = 2000;
+        timer.Tick += delegate { Close(); };
+        Click += delegate { Close(); };
+    }
+
+    protected override bool ShowWithoutActivation { get { return true; } }
+    protected override CreateParams CreateParams {
+        get {
+            CreateParams cp = base.CreateParams;
+            cp.ExStyle |= 0x08000000 | 0x80 | 0x8;   // NOACTIVATE | TOOLWINDOW | TOPMOST
+            cp.ClassStyle |= 0x20000;                // CS_DROPSHADOW
+            return cp;
+        }
+    }
+    protected override void OnHandleCreated(EventArgs e) {
+        base.OnHandleCreated(e);
+        int round = 2;   // DWMWCP_ROUND, только Windows 11
+        try { DwmHelper.DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }
+    }
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        int cy = ClientSize.Height / 2;
+        // DrawIcon, а не Icon.ToBitmap(): ToBitmap отдаёт на месте этой иконки шум
+        if (logo != null) g.DrawIcon(logo, new Rectangle(Pad, cy - LogoSize / 2, LogoSize, LogoSize));
+        int x = Pad + LogoSize + 12;
+        using (Font bold = new Font(Font, FontStyle.Bold))
+            TextRenderer.DrawText(g, title, bold, new Point(x, cy - 19), dark ? Color.White : Color.Black);
+        TextRenderer.DrawText(g, text, Font, new Point(x, cy + 1), dark ? Color.FromArgb(200, 200, 200) : Color.FromArgb(90, 90, 90));
+        using (Pen p = new Pen(dark ? Color.FromArgb(50, 50, 50) : Color.FromArgb(220, 220, 220)))
+            g.DrawRectangle(p, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+    }
+    protected override void OnFormClosed(FormClosedEventArgs e) { timer.Dispose(); base.OnFormClosed(e); }
+
+    public static void Pop(Icon logo, string title, string text, bool dark) {
+        if (current != null && !current.IsDisposed) current.Close();
+        current = new AqsToast(logo, title, text, dark);
+        Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+        current.Location = new Point(wa.Right - current.Width - 12, wa.Bottom - current.Height - 12);
+        current.Show();
+        current.timer.Start();
+    }
+}
 "@
 
 # ---------- НАСТРОЙКИ ----------
@@ -357,6 +421,14 @@ if ((Test-Path $iconOnPath) -and (Test-Path $iconOffPath)) {
 $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
 $notifyIcon.Visible = $true
 
+# Уведомления - своё окно AqsToast (почему не системные - см. комментарий у класса)
+$toastLogo = $null
+try { $toastLogo = New-Object System.Drawing.Icon((Join-Path $scriptDir "app_icon.ico"), 32, 32) } catch {}
+
+function Show-Toast($text) {
+    try { [AqsToast]::Pop($toastLogo, "AudioQuickSwitch", $text, (Get-IsDarkTheme)) } catch {}   # уведомление - не повод ронять переключение
+}
+
 function Update-Icon {
     $notifyIcon.Icon = if ($script:state.ListenOn) { $iconOn } else { $iconOff }
     $status = if ($script:state.ListenOn) { "ВКЛ" } else { "ВЫКЛ" }
@@ -369,7 +441,7 @@ function Toggle-Listen {
     # ponytail: устройство берётся из последней сборки меню; если вывод переключили
     # мимо утилиты, блокировка заработает после следующего открытия меню.
     if (-not $script:state.ListenOn -and $script:defaultOutput -match "Voicemeeter") {
-        $notifyIcon.ShowBalloonTip(1200, "Аудио", "Мониторинг недоступен, пока вывод на Voicemeeter", [System.Windows.Forms.ToolTipIcon]::Info)
+        Show-Toast "Мониторинг недоступен, пока вывод на Voicemeeter"
         return
     }
     $script:state.ListenOn = -not $script:state.ListenOn
@@ -381,7 +453,7 @@ function Toggle-Listen {
     & $svcl /SetListenToThisDevice DefaultCaptureDevice $val
     Save-State $script:state
     $status = if ($script:state.ListenOn) { "включено" } else { "выключено" }
-    $notifyIcon.ShowBalloonTip(1200, "Аудио", "Прослушивание микрофона $status", [System.Windows.Forms.ToolTipIcon]::Info)
+    Show-Toast "Прослушивание микрофона $status"
 }
 
 function Disable-Listening-Silently {
@@ -406,7 +478,7 @@ function Disable-Listening-Silently {
 # сразу в трей, а не выскакивает окном.
 function Start-Voicemeeter {
     if (-not $voicemeeterExe -or -not (Test-Path $voicemeeterExe)) {
-        $notifyIcon.ShowBalloonTip(1500, "Аудио", "Voicemeeter не найден на этом компьютере", [System.Windows.Forms.ToolTipIcon]::Warning)
+        Show-Toast "Voicemeeter не найден на этом компьютере"
         return $false
     }
     if (Get-Process -Name $voicemeeterProcessName -ErrorAction SilentlyContinue) { return $false }
@@ -436,7 +508,7 @@ function Set-OutputDevice($deviceName) {
     # лишнюю секунду на каждое переключение.
     & $svcl /SetDefault $deviceName all
     if ($null -ne $vol) { try { [AqsVolume]::Set($vol) } catch {} }
-    $notifyIcon.ShowBalloonTip(1200, "Аудио", "Устройство вывода: $deviceName", [System.Windows.Forms.ToolTipIcon]::Info)
+    Show-Toast "Устройство вывода: $deviceName"
     # меню пересоберётся само после клика (отложенный Closed в Refresh-Menu)
 }
 
