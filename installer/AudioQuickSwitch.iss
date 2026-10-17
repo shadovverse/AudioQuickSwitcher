@@ -11,12 +11,17 @@
 ; installer/vendor/svcl-x64 (в репозиторий не коммитится).
 
 #define AppName        "AudioQuickSwitch"
-#define AppVersion     "1.1.0"
 #define AppPublisher   "shadovverse"
-#define AppURL         "https://github.com/shadovverse/fast_audioswitcher"
-#define Launcher       "start-hidden.vbs"
-; до 1.0.0 включительно лаунчер назывался так - убираем при обновлении
-#define OldLauncher    "Запустить_скрытно.vbs"
+#define AppURL         "https://github.com/shadovverse/AudioQuickSwitcher"
+; Собираем свой AudioQuickSwitch.exe (launcher\AudioQuickSwitch.cs) штатным csc.exe
+; из .NET Framework - он есть в любой Windows 10/11. Версия программы задаётся
+; там же (AssemblyFileVersion) и отсюда читается из готового exe.
+#define CscExe  "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+#define SmaDll  "C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.Management.Automation\v4.0_3.0.0.0__31bf3856ad364e35\System.Management.Automation.dll"
+#if Exec(CscExe, '/nologo /target:winexe /out:"AudioQuickSwitch.exe" /win32icon:"..\app_icon.ico" /r:"' + SmaDll + '" "..\launcher\AudioQuickSwitch.cs"', SourcePath, 1, 0) != 0
+  #error Не собрался launcher\AudioQuickSwitch.cs (csc.exe)
+#endif
+#define AppVersion GetStringFileInfo(AddBackslash(SourcePath) + "AudioQuickSwitch.exe", "ProductVersion")
 
 [Setup]
 AppId={{D9ED2889-A9F8-44B8-9D0E-4D2689043DA9}
@@ -35,7 +40,7 @@ DisableProgramGroupPage=yes
 AllowNoIcons=yes
 
 OutputDir=..\dist
-OutputBaseFilename=AudioQuickSwitch-Setup
+OutputBaseFilename=AQS Setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -64,7 +69,7 @@ en.RunAfter=Launch {#AppName}
 
 [Files]
 Source: "..\AudioQuickSwitch.ps1";     DestDir: "{app}"; Flags: ignoreversion
-Source: "..\{#Launcher}";              DestDir: "{app}"; Flags: ignoreversion
+Source: "AudioQuickSwitch.exe";        DestDir: "{app}"; Flags: ignoreversion
 Source: "..\mic_icon_on.ico";          DestDir: "{app}"; Flags: ignoreversion
 Source: "..\mic_icon_off.ico";         DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app_icon.ico";            DestDir: "{app}"; Flags: ignoreversion
@@ -74,24 +79,31 @@ Source: "vendor\svcl-x64\*";          DestDir: "{app}"; Flags: ignoreversion
 Source: "stop-running.ps1";            Flags: dontcopy
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\{#Launcher}"""; IconFilename: "{app}\app_icon.ico"; WorkingDir: "{app}"
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\AudioQuickSwitch.exe"; WorkingDir: "{app}"
 
 [Run]
 ; Обе строки превращаются в галочки на последней странице мастера.
 ; Автозапуск пишем значением в HKCU\...\Run, а не ярлыком в папке автозагрузки:
 ; из [Run] можно запустить программу, но не создать ярлык, а reg.exe есть везде.
-Filename: "{sys}\reg.exe"; Parameters: "add ""HKCU\Software\Microsoft\Windows\CurrentVersion\Run"" /v {#AppName} /t REG_SZ /d ""\""{sys}\wscript.exe\"" \""{app}\{#Launcher}\"""" /f"; Description: "{cm:TaskStartup}"; Flags: postinstall skipifsilent runhidden
-Filename: "{sys}\wscript.exe"; Parameters: """{app}\{#Launcher}"""; WorkingDir: "{app}"; Description: "{cm:RunAfter}"; Flags: nowait postinstall skipifsilent
+Filename: "{sys}\reg.exe"; Parameters: "add ""HKCU\Software\Microsoft\Windows\CurrentVersion\Run"" /v {#AppName} /t REG_SZ /d ""\""{app}\AudioQuickSwitch.exe\"""" /f"; Description: "{cm:TaskStartup}"; Flags: postinstall skipifsilent runhidden
+Filename: "{app}\AudioQuickSwitch.exe"; WorkingDir: "{app}"; Description: "{cm:RunAfter}"; Flags: nowait postinstall skipifsilent
 
 [Registry]
 ; само значение создаёт галочка выше; здесь только уборка при удалении
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "{#AppName}"; Flags: uninsdeletevalue
-; обновление: если автозапуск уже включён, переписываем его на новое имя лаунчера,
-; иначе он указывал бы на удалённый {#OldLauncher}
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#AppName}"; ValueData: """{sys}\wscript.exe"" ""{app}\{#Launcher}"""; Check: AutostartEnabled
+; обновление: если автозапуск уже включён, переписываем его на AudioQuickSwitch.exe,
+; иначе он указывал бы на удалённый старый лаунчер
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#AppName}"; ValueData: """{app}\AudioQuickSwitch.exe"""; Check: AutostartEnabled
 
 [InstallDelete]
-Type: files; Name: "{app}\{#OldLauncher}"
+; прежние лаунчеры (через wscript.exe): до 1.0.0 и в 1.1.0
+Type: files; Name: "{app}\Запустить_скрытно.vbs"
+Type: files; Name: "{app}\start-hidden.vbs"
+
+[UninstallRun]
+; гасим утилиту, иначе в трее остаётся живой значок от снесённой программы;
+; деинсталлятор - unins000.exe, под фильтр не попадает
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM AudioQuickSwitch.exe"; Flags: runhidden; RunOnceId: "StopApp"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{userappdata}\{#AppName}"
@@ -104,14 +116,14 @@ begin
 end;
 
 { Гасим запущенный экземпляр: иначе при обновлении файлы заняты, а при удалении
-  в трее остаётся живой значок от снесённой программы. }
+  в трее остаётся живой значок от снесённой программы (это - [UninstallRun]). }
 procedure StopRunningApp;
 var
   ResultCode: Integer;
 begin
   ExtractTemporaryFile('stop-running.ps1');
   Exec('powershell.exe',
-       '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ExpandConstant('{tmp}\stop-running.ps1') + '"',
+       '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ExpandConstant('{tmp}\stop-running.ps1') + '" -App "' + ExpandConstant('{app}') + '"',
        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
@@ -120,12 +132,3 @@ begin
   if CurStep = ssInstall then StopRunningApp;
 end;
 
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-var
-  ResultCode: Integer;
-begin
-  if CurUninstallStep = usUninstall then
-    Exec('powershell.exe',
-         '-NoProfile -WindowStyle Hidden -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ''*AudioQuickSwitch.ps1*'' -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"',
-         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-end;

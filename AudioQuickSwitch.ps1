@@ -18,6 +18,28 @@ using System.Windows.Forms;
 public class DwmHelper {
     [DllImport("dwmapi.dll")]
     public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+    // Запуск без курсора "запуск приложения" (стрелка с колёсиком). Его Windows
+    // показывает, когда программу запускает процесс с окнами - а утилита с 1.2.0
+    // это AudioQuickSwitch.exe (до этого консольный powershell.exe, колёсика не было).
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct StartupInfo { public int cb; public string reserved, desktop, title; public int x, y, xSize, ySize, xChars, yChars, fill, flags; public short show, reserved2; public IntPtr reserved3, stdIn, stdOut, stdErr; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct ProcInfo { public IntPtr hProcess, hThread; public int pid, tid; }
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    static extern bool CreateProcess(string app, string cmd, IntPtr pa, IntPtr ta, bool inherit, int flags, IntPtr env, string dir, ref StartupInfo si, out ProcInfo pi);
+    [DllImport("kernel32.dll")]
+    static extern bool CloseHandle(IntPtr h);
+    public static void StartNoFeedback(string cmdLine, short showCmd) {
+        StartupInfo si = new StartupInfo();
+        si.cb = Marshal.SizeOf(si);
+        si.flags = 0x80 | 0x1;   // STARTF_FORCEOFFFEEDBACK | STARTF_USESHOWWINDOW
+        si.show = showCmd;
+        ProcInfo pi;
+        if (CreateProcess(null, cmdLine, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero, null, ref si, out pi)) {
+            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+        }
+    }
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hwnd);
 
@@ -530,7 +552,7 @@ function Start-Voicemeeter {
         return $false
     }
     if (Get-Process -Name $voicemeeterProcessName -ErrorAction SilentlyContinue) { return $false }
-    Start-Process -FilePath $voicemeeterExe -WindowStyle Minimized
+    [DwmHelper]::StartNoFeedback("`"$voicemeeterExe`"", 2)   # 2 = SW_SHOWMINIMIZED
     return $true
 }
 
@@ -653,7 +675,8 @@ function Build-Menu {
     # Штатный список устройств Windows (mmsys.cpl, вкладка "Воспроизведение") -
     # в Windows 11 он спрятан глубоко в параметрах, отсюда до него один клик.
     $panelItem = New-Object System.Windows.Forms.ToolStripMenuItem("Настройки звука Windows")
-    $panelItem.Add_Click({ Start-Process "control.exe" -ArgumentList "mmsys.cpl,,0" })
+    # сразу rundll32, а не control.exe: тот запускает его сам и снова включил бы колёсико
+    $panelItem.Add_Click({ [DwmHelper]::StartNoFeedback("rundll32.exe shell32.dll,Control_RunDLL mmsys.cpl,,0", 1) })
     $menu.Items.Add($panelItem) | Out-Null
 
     $exitItem = New-Object System.Windows.Forms.ToolStripMenuItem("Выход")

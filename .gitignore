@@ -8,3 +8,4 @@ dist/
 
 # svcl от NirSoft для сборки установщика: распаковать сюда svcl-x64.zip
 installer/vendor/
+installer/AudioQuickSwitch.exe
