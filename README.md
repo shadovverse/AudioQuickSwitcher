@@ -1,5 +1,5 @@
 
-## [RUS] ##
+## [рус] ##
 ## Небольшая утилита, которая повышает удобство и скорость при работе с аудиоустройствами Win 11: ##
 
 + **Выбор активного аудиоустройства** (*из списка подключённых*), **изменение громкости в реальном времени, переход в расширенные настройки аудиоустройств по одному клику**;
@@ -8,7 +8,7 @@
 
 ![Меню AudioQuickSwitch](docs/menu_example.png)
 
-## [ENG] ##
+## [eng] ##
 ## Light-weight utility that makes work with audio-devices in Win 11 more easier and faster: ##
 
 + **Select an active audio device** (*from a list of connected devices*), **real-time volume adjusting, and access advanced audio-devices settings with a single click**;
