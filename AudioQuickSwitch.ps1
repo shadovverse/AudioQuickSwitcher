@@ -66,22 +66,102 @@ public class DwmHelper {
 public class Win11Renderer : ToolStripProfessionalRenderer {
     public Win11Renderer(ProfessionalColorTable t) : base(t) { }
     protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e) {
-        if (!e.Item.Enabled || !e.Item.Selected) return;
-        // пункты-устройства у WinForms шире видимой части меню (свой Padding) -
-        // без ограничения правое скругление уходило за рамку и обрезалось
-        int w = Math.Min(e.Item.Width, e.ToolStrip.DisplayRectangle.Right - e.Item.Bounds.X);
-        Rectangle r = new Rectangle(4, 1, w - 8, e.Item.Height - 2);
-        const int d = 8;   // диаметр скругления
-        using (System.Drawing.Drawing2D.GraphicsPath p = new System.Drawing.Drawing2D.GraphicsPath())
+        if (!e.Item.Enabled || !e.Item.Selected || AqsMenu.Dragged(e.Item)) return;
+        using (System.Drawing.Drawing2D.GraphicsPath p = Round(Plate(e.Item), 8))
         using (Brush b = new SolidBrush(ColorTable.MenuItemSelected)) {
-            p.AddArc(r.X, r.Y, d, d, 180, 90);
-            p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
-            p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
-            p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
-            p.CloseFigure();
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             e.Graphics.FillPath(b, p);
         }
+    }
+    // плашка подсветки в координатах пункта. Пункты-устройства у WinForms шире видимой
+    // части меню (свой Padding) - без ограничения правое скругление уходило за рамку
+    public static Rectangle Plate(ToolStripItem i) {
+        int w = Math.Min(i.Width, i.Owner.DisplayRectangle.Right - i.Bounds.X);
+        return new Rectangle(4, 1, w - 8, i.Height - 2);
+    }
+    public static System.Drawing.Drawing2D.GraphicsPath Round(Rectangle r, int d) {   // d - диаметр скругления
+        System.Drawing.Drawing2D.GraphicsPath p = new System.Drawing.Drawing2D.GraphicsPath();
+        p.AddArc(r.X, r.Y, d, d, 180, 90);
+        p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        p.CloseFigure();
+        return p;
+    }
+
+    // Заряд беспроводного устройства после названия: "realme Buds Air8 Pro ● 100".
+    // Точка со свечением - цвет плавно зелёный -> жёлтый (50) -> красный; число
+    // жирным, цветом текста пункта. Уровень - Tag[4] пункта (-1 - не рисуем),
+    // ширину меню под это считает Build-Menu (ContentWidth).
+    const int D = 8;   // диаметр точки
+    const TextFormatFlags NoPad = TextFormatFlags.NoPadding;
+    // Видимая ширина подписи пункта (с " ● 100", если battery) - для расчёта ширины меню.
+    // Меряем на настоящем Graphics: без него MeasureText флаг NoPadding игнорирует и
+    // прибавляет поля вокруг букв (на "100" - почти вдвое).
+    public static int ContentWidth(string text, Font f, int level) {   // level < 0 - без заряда
+        using (Bitmap bmp = new Bitmap(1, 1))
+        using (Graphics g = Graphics.FromImage(bmp))
+        using (Font b = new Font(f, FontStyle.Bold)) {
+            int w = TextRenderer.MeasureText(g, text, f, Size.Empty, NoPad).Width;
+            // -3: у жирных цифр справа пустой "хвост" глифа, без вычета отступ справа
+            // от числа выходил на 3 px больше, чем слева от текста (замерено по пикселям)
+            return level >= 0 ? w + 6 + D + 5 + TextRenderer.MeasureText(g, level.ToString(), b, Size.Empty, NoPad).Width - 3 : w;
+        }
+    }
+    protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e) {
+        if (AqsMenu.Dragged(e.Item)) return;   // место перетаскиваемого пункта пустое
+        // "Мониторинг: ВКЛ" (Tag = "boldTail") - состояние после двоеточия жирным
+        int colon = e.Item.Tag as string == "boldTail" ? e.Text.IndexOf(':') : -1;
+        if (colon >= 0) {
+            string head = e.Text.Substring(0, colon + 1);
+            Color tc = e.Item.Enabled ? e.TextColor : SystemColors.GrayText;
+            Rectangle r = e.TextRectangle;
+            TextRenderer.DrawText(e.Graphics, head, e.TextFont, r, tc, e.TextFormat);
+            // конец видимого head: DrawText рисует его с полями вокруг букв
+            int hx = r.X + (TextRenderer.MeasureText(e.Graphics, head, e.TextFont, Size.Empty, e.TextFormat).Width
+                          + TextRenderer.MeasureText(e.Graphics, head, e.TextFont, Size.Empty, e.TextFormat | NoPad).Width) / 2;
+            using (Font bold = new Font(e.TextFont, FontStyle.Bold))
+                TextRenderer.DrawText(e.Graphics, e.Text.Substring(colon + 1), bold, new Rectangle(hx, r.Y, r.Right - hx, r.Height), tc, e.TextFormat | NoPad);
+            return;
+        }
+        base.OnRenderItemText(e);
+        object[] tag = e.Item.Tag as object[];
+        // WinForms зовёт это и для пустого поля горячей клавиши - рисуем только у названия
+        if (tag == null || tag.Length < 5 || !(tag[4] is int) || (int)tag[4] < 0 || e.Text != tag[1] as string) return;
+        int level = Math.Min(100, (int)tag[4]);
+        Color c = level >= 50 ? Lerp(Color.FromArgb(215, 175, 40), Color.FromArgb(40, 200, 90), (level - 50) / 50f)
+                              : Lerp(Color.FromArgb(225, 60, 60), Color.FromArgb(215, 175, 40), level / 50f);
+        Rectangle t = e.TextRectangle;
+        // конец видимого текста: base рисует его с полями вокруг букв - вычитаем правое поле
+        int full = TextRenderer.MeasureText(e.Graphics, e.Text, e.TextFont, Size.Empty, e.TextFormat).Width;
+        int bare = TextRenderer.MeasureText(e.Graphics, e.Text, e.TextFont, Size.Empty, e.TextFormat | NoPad).Width;
+        int x = t.X + (full + bare) / 2 + 6;
+        int y = t.Y + (t.Height - D) / 2;
+        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        // Свечение: круг радиусом 9 px с тем же центром, радиальный градиент того же
+        // цвета - к краю 0, спад неравномерный (на середине радиуса 35% центральной
+        // плотности): мягко снаружи, плотно у точки. В центре альфа 0xA0 на полном
+        // заряде и слабее к нулю (0x50) - иначе разряженная красная точка "горит".
+        const int G = 9;
+        float cx = x + D / 2f, cy = y + D / 2f;
+        using (System.Drawing.Drawing2D.GraphicsPath gp = new System.Drawing.Drawing2D.GraphicsPath()) {
+            gp.AddEllipse(cx - G, cy - G, 2 * G, 2 * G);
+            using (System.Drawing.Drawing2D.PathGradientBrush glow = new System.Drawing.Drawing2D.PathGradientBrush(gp)) {
+                glow.CenterColor = Color.FromArgb(0x50 + (0xA0 - 0x50) * level / 100, c);
+                glow.SurroundColors = new Color[] { Color.FromArgb(0, c) };
+                System.Drawing.Drawing2D.Blend bl = new System.Drawing.Drawing2D.Blend(3);
+                bl.Positions = new float[] { 0f, 0.5f, 1f };   // 0 - край, 1 - центр
+                bl.Factors = new float[] { 0f, 0.35f, 1f };
+                glow.Blend = bl;
+                e.Graphics.FillPath(glow, gp);
+            }
+        }
+        using (Brush b = new SolidBrush(c)) e.Graphics.FillEllipse(b, x, y, D, D);
+        using (Font bold = new Font(e.TextFont, FontStyle.Bold))
+            TextRenderer.DrawText(e.Graphics, level.ToString(), bold, new Rectangle(x + D + 5, t.Y, 60, t.Height), e.TextColor, e.TextFormat | NoPad);
+    }
+    static Color Lerp(Color a, Color b, float t) {
+        return Color.FromArgb((int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
     }
 }
 
@@ -125,10 +205,188 @@ public interface IAqsMMDevice {
 public interface IAqsMMDeviceEnumerator {
     void EnumAudioEndpoints(int dataFlow, int stateMask, out IntPtr devices);
     void GetDefaultAudioEndpoint(int dataFlow, int role, out IAqsMMDevice device);
+    void GetDevice([MarshalAs(UnmanagedType.LPWStr)] string id, out IAqsMMDevice device);   // не зовём - место в vtable
+    void RegisterEndpointNotificationCallback(IAqsMMNotificationClient client);
 }
 
 [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
 public class AqsMMDeviceEnumerator { }
+
+[StructLayout(LayoutKind.Sequential)]
+public struct AqsPropertyKey { public Guid fmtid; public int pid; }
+
+[Guid("7991EEC9-7E89-4D85-8390-6C703CEC60C0"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IAqsMMNotificationClient {
+    void OnDeviceStateChanged([MarshalAs(UnmanagedType.LPWStr)] string id, int state);
+    void OnDeviceAdded([MarshalAs(UnmanagedType.LPWStr)] string id);
+    void OnDeviceRemoved([MarshalAs(UnmanagedType.LPWStr)] string id);
+    void OnDefaultDeviceChanged(int flow, int role, [MarshalAs(UnmanagedType.LPWStr)] string id);
+    void OnPropertyValueChanged([MarshalAs(UnmanagedType.LPWStr)] string id, AqsPropertyKey key);
+}
+
+// Уведомления Windows о звуковых устройствах: подключили/отключили (Bluetooth и т.п.),
+// сменили устройство по умолчанию мимо утилиты. Приходят на чужом потоке и пачками
+// (смена по умолчанию - по разу на каждую роль), поэтому Changed - на потоке
+// интерфейса и один раз на пачку (через 300 мс тишины). Свойства устройств
+// (OnPropertyValueChanged) не слушаем - они меняются постоянно.
+public class AqsDeviceWatch : IAqsMMNotificationClient {
+    public static event EventHandler Changed;
+    // Оба держим сами: Windows на подписчика ссылку НЕ берёт (AddRef не делает) -
+    // без поля сборщик мусора его удалял, и первое же уведомление (например, при
+    // включении мониторинга) роняло процесс в clr.dll (0xc0000005).
+    static AqsDeviceWatch inst;
+    static IAqsMMDeviceEnumerator en;
+    static Control ui;
+    static Timer quiet;
+    public static void Start() {   // звать с потока интерфейса
+        ui = new Control(); ui.CreateControl();
+        quiet = new Timer(); quiet.Interval = 300;
+        quiet.Tick += delegate { quiet.Stop(); if (Changed != null) Changed(null, EventArgs.Empty); };
+        en = (IAqsMMDeviceEnumerator)new AqsMMDeviceEnumerator();
+        inst = new AqsDeviceWatch();
+        en.RegisterEndpointNotificationCallback(inst);
+    }
+    static void Poke() { ui.BeginInvoke((MethodInvoker)delegate { quiet.Stop(); quiet.Start(); }); }
+    public void OnDeviceStateChanged(string id, int state) { Poke(); }
+    public void OnDeviceAdded(string id) { Poke(); }
+    public void OnDeviceRemoved(string id) { Poke(); }
+    public void OnDefaultDeviceChanged(int flow, int role, string id) { Poke(); }
+    public void OnPropertyValueChanged(string id, AqsPropertyKey key) { }
+}
+
+// Меню, где устройства (пункты с Tag-массивом) переставляются мышью: зажатый пункт
+// "парит" под курсором (его плашка с тенью и "дышащим" свечением поверх меню), его место пустое
+// и переезжает между соседями на лету. После отпускания - Reordered (порядок
+// сохраняет скрипт). Отпускание после перетаскивания до пунктов не доходит: иначе оно
+// было бы кликом - включилось бы устройство (или "Выход", если отпустить над ним).
+public class AqsMenu : ContextMenuStrip {
+    public event EventHandler Reordered;
+    public Color Glow = Color.Gray;   // свечение плашки - акцент Windows, ставит Set-MenuTheme
+    const int M = 16;                 // поля спрайта под тень и свечение
+    ToolStripItem pressed, drag;
+    int downY, grabDY, dragY, grabTick;
+    Bitmap sprite, glow; Point spriteOff;   // плашка с тенью, свечение; сдвиг от угла пункта
+    System.Windows.Forms.Timer pulse;       // дыхание свечения, пока тащим
+
+    public bool Dragging { get { return drag != null; } }
+    public static bool Dragged(ToolStripItem i) { AqsMenu m = i.Owner as AqsMenu; return m != null && m.drag == i; }
+    static bool IsDevice(ToolStripItem i) { return i != null && i.Tag is object[]; }
+
+    protected override void OnMouseDown(MouseEventArgs e) {
+        ToolStripItem i = GetItemAt(e.Location);
+        pressed = e.Button == MouseButtons.Left && IsDevice(i) ? i : null;
+        downY = e.Y;
+        base.OnMouseDown(e);
+    }
+    protected override void OnMouseMove(MouseEventArgs e) {
+        if (pressed != null && drag == null && Math.Abs(e.Y - downY) > 4) {
+            MakeSprite(pressed);
+            drag = pressed; grabDY = downY - pressed.Bounds.Y; grabTick = Environment.TickCount;
+            pulse = new System.Windows.Forms.Timer();
+            pulse.Interval = 30;
+            pulse.Tick += delegate { Invalidate(SpriteRect()); };
+            pulse.Start();
+        }
+        if (drag == null) { base.OnMouseMove(e); return; }
+        // плашка ходит только в пределах блока устройств
+        int top = int.MaxValue, bottom = 0;
+        foreach (ToolStripItem i in Items) if (IsDevice(i)) { top = Math.Min(top, i.Bounds.Top); bottom = Math.Max(bottom, i.Bounds.Bottom); }
+        dragY = Math.Max(top, Math.Min(bottom - drag.Height, e.Y - grabDY));
+        int mid = dragY + drag.Height / 2;
+        foreach (ToolStripItem i in Items) {
+            if (i == drag || !IsDevice(i) || mid < i.Bounds.Top || mid >= i.Bounds.Bottom) continue;
+            int to = Items.IndexOf(i);   // вниз - встаёт после соседа, вверх - перед ним
+            // одна раскладка на перестановку: иначе после Remove ползунок (дочернее окно)
+            // успевал съехать на строку вверх и вернуться - оставлял артефакты
+            SuspendLayout();
+            Items.Remove(drag);
+            Items.Insert(to, drag);
+            ResumeLayout();
+            break;
+        }
+        Invalidate();   // без base: подсветка не бегает за курсором по пунктам
+    }
+    protected override void OnMouseUp(MouseEventArgs e) {
+        pressed = null;
+        if (drag == null) { base.OnMouseUp(e); return; }
+        pulse.Dispose(); sprite.Dispose(); glow.Dispose();
+        drag = null;
+        Invalidate();
+        if (Reordered != null) Reordered(this, EventArgs.Empty);
+    }
+    protected override void OnPaint(PaintEventArgs e) {
+        base.OnPaint(e);
+        if (drag == null) return;
+        Rectangle r = SpriteRect();
+        // дыхание: свечение плавно 100% -> 35% -> 100% за 2.4 с, с пика в момент захвата
+        double t = (Environment.TickCount - grabTick) * 2 * Math.PI / 2400;
+        System.Drawing.Imaging.ColorMatrix cm = new System.Drawing.Imaging.ColorMatrix();
+        cm.Matrix33 = (float)(0.35 + 0.65 * (0.5 + 0.5 * Math.Cos(t)));
+        using (System.Drawing.Imaging.ImageAttributes ia = new System.Drawing.Imaging.ImageAttributes()) {
+            ia.SetColorMatrix(cm);
+            e.Graphics.DrawImage(glow, r, 0, 0, r.Width, r.Height, GraphicsUnit.Pixel, ia);
+        }
+        e.Graphics.DrawImage(sprite, r.X, r.Y);
+    }
+    Rectangle SpriteRect() { return new Rectangle(drag.Bounds.X + spriteOff.X, dragY + spriteOff.Y, sprite.Width, sprite.Height); }
+
+    // Спрайты собираются раз при захвате (дальше на каждый кадр - только DrawImage):
+    // свечение отдельно (ему кадр за кадром меняется прозрачность), и плашка - тень
+    // чуть ниже и сама плашка из снимка меню вместе с подсветкой (кисть-текстура по
+    // скруглённому контуру: края сглажены, в отличие от SetClip).
+    void MakeSprite(ToolStripItem it) {
+        Rectangle pl = Win11Renderer.Plate(it);
+        spriteOff = new Point(pl.X - M, pl.Y - M);
+        sprite = new Bitmap(pl.Width + 2 * M, pl.Height + 2 * M);
+        glow = new Bitmap(sprite.Width, sprite.Height);
+        Rectangle r = new Rectangle(M, M, pl.Width, pl.Height);
+        using (Graphics g = Graphics.FromImage(glow)) {
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            Halo(g, r, Color.FromArgb(12, Glow), 6, 0);   // к краю реже,
+            Halo(g, r, Color.FromArgb(16, Glow), 3, 0);   // у плашки плотнее
+        }
+        using (Bitmap all = new Bitmap(Width, Height))
+        using (Graphics g = Graphics.FromImage(sprite)) {
+            DrawToBitmap(all, new Rectangle(0, 0, Width, Height));
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            Halo(g, r, Color.FromArgb(13, 0, 0, 0), 8, 7);   // тень - мягкая, ниже плашки
+            using (System.Drawing.Drawing2D.GraphicsPath p = Win11Renderer.Round(r, 8))
+            using (TextureBrush tb = new TextureBrush(all)) {
+                tb.TranslateTransform(M - it.Bounds.X - pl.X, M - it.Bounds.Y - pl.Y);
+                g.FillPath(tb, p);
+            }
+        }
+    }
+    // мягкий ореол вокруг r: n слоёв, каждый шире и прозрачнее, со сдвигом вниз dy
+    static void Halo(Graphics g, Rectangle r, Color c, int n, int dy) {
+        using (Brush b = new SolidBrush(c))
+            for (int i = n; i >= 1; i--) {
+                Rectangle l = r; l.Inflate(i, i); l.Offset(0, dy);
+                using (System.Drawing.Drawing2D.GraphicsPath p = Win11Renderer.Round(l, 8 + 2 * i)) g.FillPath(b, p);
+            }
+    }
+}
+
+// Заряд Bluetooth-гарнитуры. Windows узнаёт его по Hands-Free (HFP) и хранит в
+// свойстве узла этой службы; читаем напрямую через cfgmgr32 - Get-PnpDeviceProperty
+// на то же свойство стоит ~600 мс. -1: Windows заряд не знает или узла нет.
+public static class AqsBattery {
+    [StructLayout(LayoutKind.Sequential)]
+    struct DevPropKey { public Guid fmtid; public uint pid; }
+    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
+    static extern int CM_Locate_DevNodeW(out uint devInst, string deviceId, int flags);
+    [DllImport("cfgmgr32.dll")]
+    static extern int CM_Get_DevNode_PropertyW(uint devInst, ref DevPropKey key, out uint type, byte[] buf, ref int size, int flags);
+    public static int Get(string instanceId) {
+        uint dn;
+        if (CM_Locate_DevNodeW(out dn, instanceId, 0) != 0) return -1;
+        DevPropKey k = new DevPropKey();
+        k.fmtid = new Guid("104EA319-6EE2-4701-BD47-8DDBF425BBE5"); k.pid = 2;
+        byte[] b = new byte[4]; int size = b.Length; uint type;
+        if (CM_Get_DevNode_PropertyW(dn, ref k, out type, b, ref size, 0) != 0 || size < 1) return -1;
+        return b[0];
+    }
+}
 
 public static class AqsVolume {
     // Устройство берём заново на каждый вызов: после переключения вывода
@@ -185,11 +443,11 @@ public class AqsSlider : Control {
     // Дорожка - ровно по краям текста пунктов меню (отступ LineIn от краёв контрола),
     // бегунок ходит внутри неё и за её концы не вылезает: слева и справа поровну.
     const int LineIn = 4;
-    const int LabelH = 22; // строка подписи "Громкость: N %" над дорожкой
+    const int LabelH = 22; // строка подписи "Громкость: N" над дорожкой
     // Подпись рисуем сами, внутри контрола: отдельный пункт меню с меняющимся
     // текстом при каждом шаге заставлял всё меню пересчитывать раскладку.
     const string Label = "Громкость:";
-    const int LabelX = 3;  // замерено: так текст встаёт ровно под "Устройства вывода:"
+    const int LabelX = 3;  // замерено: так текст встаёт ровно под текстом пунктов меню
 
     public AqsSlider() {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
@@ -238,9 +496,11 @@ public class AqsSlider : Control {
         int r = (hover || dragging) ? 7 : 6;
         using (Brush b = new SolidBrush(Accent)) g.FillEllipse(b, x - r, cy - r, 2 * r, 2 * r);
         TextFormatFlags f = TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter;
-        TextRenderer.DrawText(g, Label, Font, new Rectangle(LabelX, 0, Width, LabelH), SystemColors.GrayText, f);
-        int nx = LabelX + TextRenderer.MeasureText(g, Label, Font, Size.Empty, f).Width + 4;
-        TextRenderer.DrawText(g, val + " %", Font, new Rectangle(nx, 0, Width, LabelH), ForeColor, f);
+        using (Font bold = new Font(Font, FontStyle.Bold)) {
+            TextRenderer.DrawText(g, Label, bold, new Rectangle(LabelX, 0, Width, LabelH), SystemColors.GrayText, f);
+            int nx = LabelX + TextRenderer.MeasureText(g, Label, bold, Size.Empty, f).Width + 4;
+            TextRenderer.DrawText(g, val.ToString(), bold, new Rectangle(nx, 0, Width, LabelH), ForeColor, f);
+        }
     }
 
     protected override void OnMouseDown(MouseEventArgs e) {
@@ -261,19 +521,25 @@ public class AqsSlider : Control {
 // кнопки на панели задач, над треем, закрывается само или по клику.
 public class AqsToast : Form {
     static AqsToast current;
-    Icon logo; string title, text; bool dark;
+    Icon logo; string title, head, tail; bool dark; Font bold;
     Timer timer = new Timer();
     const int Pad = 16, LogoSize = 32;
+    const TextFormatFlags NoPad = TextFormatFlags.NoPadding;
 
     AqsToast(Icon logo, string title, string text, bool dark) {
-        this.logo = logo; this.title = title; this.text = text; this.dark = dark;
+        this.logo = logo; this.title = title; this.dark = dark;
+        // "Устройство: realme Buds Air8 Pro" - то, что после двоеточия, жирным
+        int c = text.IndexOf(':');
+        head = c < 0 ? text : text.Substring(0, c + 1);
+        tail = c < 0 ? "" : text.Substring(c + 1);
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
         Font = SystemFonts.MessageBoxFont;
+        bold = new Font(Font, FontStyle.Bold);
         BackColor = dark ? Color.FromArgb(32, 32, 32) : Color.FromArgb(249, 249, 249);
-        int textW = Math.Max(TextRenderer.MeasureText(title, new Font(Font, FontStyle.Bold)).Width,
-                             TextRenderer.MeasureText(text, Font).Width);
+        int textW = Math.Max(TextRenderer.MeasureText(title, bold, Size.Empty, NoPad).Width,
+                             TextRenderer.MeasureText(head, Font, Size.Empty, NoPad).Width + TextRenderer.MeasureText(tail, bold, Size.Empty, NoPad).Width);
         ClientSize = new Size(Pad + LogoSize + 12 + textW + Pad, 64);
         timer.Interval = 2000;
         timer.Tick += delegate { Close(); };
@@ -300,13 +566,14 @@ public class AqsToast : Form {
         // DrawIcon, а не Icon.ToBitmap(): ToBitmap отдаёт на месте этой иконки шум
         if (logo != null) g.DrawIcon(logo, new Rectangle(Pad, cy - LogoSize / 2, LogoSize, LogoSize));
         int x = Pad + LogoSize + 12;
-        using (Font bold = new Font(Font, FontStyle.Bold))
-            TextRenderer.DrawText(g, title, bold, new Point(x, cy - 19), dark ? Color.White : Color.Black);
-        TextRenderer.DrawText(g, text, Font, new Point(x, cy + 1), dark ? Color.FromArgb(200, 200, 200) : Color.FromArgb(90, 90, 90));
+        TextRenderer.DrawText(g, title, bold, new Point(x, cy - 19), dark ? Color.White : Color.Black, NoPad);
+        Color tc = dark ? Color.FromArgb(200, 200, 200) : Color.FromArgb(90, 90, 90);
+        TextRenderer.DrawText(g, head, Font, new Point(x, cy + 1), tc, NoPad);
+        TextRenderer.DrawText(g, tail, bold, new Point(x + TextRenderer.MeasureText(g, head, Font, Size.Empty, NoPad).Width, cy + 1), tc, NoPad);
         using (Pen p = new Pen(dark ? Color.FromArgb(50, 50, 50) : Color.FromArgb(220, 220, 220)))
             g.DrawRectangle(p, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
     }
-    protected override void OnFormClosed(FormClosedEventArgs e) { timer.Dispose(); base.OnFormClosed(e); }
+    protected override void OnFormClosed(FormClosedEventArgs e) { timer.Dispose(); bold.Dispose(); base.OnFormClosed(e); }
 
     public static void Pop(Icon logo, string title, string text, bool dark) {
         if (current != null && !current.IsDisposed) current.Close();
@@ -436,14 +703,17 @@ function Set-MenuTheme($menu) {
     $menu.BackColor = $bg
     $menu.ForeColor = $fg
     foreach ($it in $menu.Items) {
-        if ($it -is [System.Windows.Forms.ToolStripMenuItem]) { $it.ForeColor = $fg }
+        if ($it -is [System.Windows.Forms.ToolStripMenuItem]) {
+            # устройство вывода: текущее - обычным цветом, остальные затенены (но кликабельны)
+            $it.ForeColor = if ($it.Tag -is [array] -and -not $it.Tag[2]) { [System.Drawing.SystemColors]::GrayText } else { $fg }
+        }
         if ($it.Control -is [AqsSlider]) {
             $s = $it.Control
             $s.BackColor = $bg; $s.ForeColor = $fg; $s.Dark = $isDark
             $s.Accent = Get-AccentColor $isDark
         }
     }
-    Set-RoundedCorners $menu
+    $menu.Glow = Get-AccentColor $isDark
 }
 
 function New-MicIcon([System.Drawing.Color]$bg) {
@@ -556,50 +826,46 @@ function Start-Voicemeeter {
     return $true
 }
 
-function Set-OutputDevice($deviceName) {
+function Set-OutputDevice($deviceId, $deviceName, $isBT) {
     # Сразу, а не при пересборке меню: по нему Toggle-Listen запрещает мониторинг
     # с Voicemeeter, а клик по значку сразу после выбора Voicemeeter (пока тот
     # запускается) иначе видел старое устройство и мониторинг включался.
     $script:defaultOutput = $deviceName
+    # История выбранных устройств, свежее первым: куда вернуть звук, если текущее
+    # отключится. Только наши переключения - не то, что подставила Windows. В
+    # state.json, чтобы пережила перезапуск.
+    $script:state | Add-Member -Force NoteProperty Recent @((@($deviceId) + @($script:state.Recent | Where-Object { $_ -and $_ -ne $deviceId })) | Select-Object -First 10)
+    Save-State $script:state
 
     # Громкость общая на все устройства: новое получает уровень текущего. Windows
     # держит у каждого устройства свою, и ползунок "прыгал" при переключении.
-    # Читаем до всего остального: если ниже гасится Voicemeeter, Windows сама
-    # перекидывает вывод на железо, и прочиталась бы громкость чужого устройства.
+    # Кроме беспроводных: у наушников своя громкость - с них и на них не переносим.
+    # Читаем до переключения: после него прочиталась бы громкость уже нового.
     $vol = $null
-    try { $vol = [AqsVolume]::Get() } catch {}
+    if (-not $isBT -and -not $script:defaultBT) { try { $vol = [AqsVolume]::Get() } catch {} }
 
     if ($deviceName -match "Voicemeeter") {
         Disable-Listening-Silently; Update-Icon   # с Voicemeeter мониторинг запрещён
         # даём Voicemeeter время создать свои аудио-эндпоинты перед переключением
         if (Start-Voicemeeter) { Start-Sleep -Milliseconds 1500 }
-    } elseif ($voicemeeterProcessName) {
-        # $voicemeeterProcessName пуст, если Voicemeeter на этой машине не установлен
-        Get-Process -Name $voicemeeterProcessName -ErrorAction SilentlyContinue | Stop-Process -Force
-    }
+    }   # уход с Voicemeeter гасит его обработчик AqsDeviceWatch.Changed
 
     # Ждать подтверждения не нужно: замерено, что первый же /sjson после
     # /SetDefault уже отдаёт новое устройство. Прежний поллинг только добавлял
     # лишнюю секунду на каждое переключение.
-    & $svcl /SetDefault $deviceName all
+    & $svcl /SetDefault $deviceId all
     if ($null -ne $vol) { try { [AqsVolume]::Set($vol) } catch {} }
     Show-Toast "Устройство: $deviceName"
     # меню пересоберётся само после клика (отложенный Closed в Refresh-Menu)
 }
 
+# Собирает пункты во временное меню - Refresh-Menu переносит их в постоянное.
 function Build-Menu {
     $menu = New-Object System.Windows.Forms.ContextMenuStrip
-    $menu.ShowImageMargin = $false
-    $menu.AutoSize = $true
-    $menu.Padding = New-Object System.Windows.Forms.Padding(1)
 
-    $tmp = Join-Path $env:TEMP "aqs_devices.json"
+    $tmp = Join-Path $env:TEMP "aqs_devices_$PID.json"   # свой на процесс: два экземпляра не пишут в один файл
     Remove-Item $tmp -ErrorAction SilentlyContinue
 
-    $header = New-Object System.Windows.Forms.ToolStripMenuItem("Устройства вывода:")
-    $header.Enabled = $false
-    $menu.Items.Add($header) | Out-Null
-    $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 
     try {
         # Прямой вызов, а НЕ Start-Process -Wait: замерено 156мс против 1023мс.
@@ -624,16 +890,34 @@ function Build-Menu {
             throw "JSON распарсился, но устройств вывода (Type=Device, Direction=Render) не найдено. Возможно, названия полей в твоей версии svcl.exe другие. Первые 300 символов сырого файла: $($raw.Substring(0, [Math]::Min(300, $raw.Length)))"
         }
 
-        foreach ($d in $playback) {
+        $devItems = foreach ($d in $playback) {
+            # Беспроводные (Bluetooth: путь устройства {1}.BTHENUM / BTHLE...) подписываем
+            # моделью из скобок Windows ("realme Buds Air8 Pro") - своё имя у них безликое
+            # ("Наушники") и совпадает с проводными. Остальные - своим именем.
+            # Переключаем по Item ID - он уникален (по имени svcl взял бы первое попавшееся).
+            $props = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\$($d.'Item ID' -replace '^.*\}\.', '')\Properties"
+            $devPath = (Get-ItemProperty $props -ErrorAction SilentlyContinue).'{b3f8fa53-0004-438e-9003-51a46e139bfc},2'
+            $model = ("$($d.'Device Name')" -replace '\s+', ' ').Trim()
+            $isBT = $devPath -match '^\{1\}\.BTH'
+            $label = if ($isBT -and $model) { $model } else { $d.Name }
             $isDefault = ($d.Default -eq "Render")
-            if ($isDefault) { $script:defaultOutput = $d.Name }
-            $mark = if ($isDefault) { "`t  ✔" } else { "" }
-            $item = New-Object System.Windows.Forms.ToolStripMenuItem("$($d.Name)$mark")
+            if ($isDefault) {
+                $script:defaultOutput = $label; $script:defaultBT = $isBT; $script:defaultId = $d.'Item ID'
+            }
+            # узел Hands-Free той же гарнитуры (для заряда): тот же путь, служба 0000111E вместо аудио
+            $hf = if ($devPath -match '^\{1\}\.BTHENUM') { ($devPath -replace '^\{1\}\.', '') -replace '^BTHENUM\\{[0-9A-Fa-f-]+\}', 'BTHENUM\{0000111E-0000-1000-8000-00805F9B34FB}' }
+            $item = New-Object System.Windows.Forms.ToolStripMenuItem($label)
+            if ($isDefault) { $item.Font = New-Object System.Drawing.Font($menu.Font, [System.Drawing.FontStyle]::Bold) }
             $item.Padding = New-Object System.Windows.Forms.Padding(4, 0, 2, 0)
-            $item.Tag = $d.Name
-            $item.Add_Click({ param($s,$e) Set-OutputDevice $s.Tag })
-            $menu.Items.Add($item) | Out-Null
+            $item.Tag = @($d.'Item ID', $label, $isDefault, $hf, -1, $isBT)   # цвет по $isDefault - в Set-MenuTheme; [4] - заряд
+            $item.Add_Click({ param($s,$e) Set-OutputDevice $s.Tag[0] $s.Tag[1] $s.Tag[5] })
+            $item
         }
+        # порядок, расставленный перетаскиванием (Item ID в state.json); новые - в конце,
+        # по алфавиту: сначала латинские названия, потом кириллические
+        $order = @($script:state.Order)
+        $devItems | Sort-Object { $i = [array]::IndexOf($order, $_.Tag[0]); if ($i -lt 0) { $order.Count } else { $i } },
+            { $_.Tag[1] -notmatch '^[A-Za-z]' }, { $_.Tag[1] } | ForEach-Object { $menu.Items.Add($_) | Out-Null }
     } catch {
         # Показываем реальную причину прямо в меню, чтобы было видно на скриншоте
         $msg = "[$($_.Exception.GetType().Name), строка $($_.InvocationInfo.ScriptLineNumber)] $($_.Exception.Message)"
@@ -653,24 +937,20 @@ function Build-Menu {
     try {
         $vol = [AqsVolume]::Get()
         $track = New-Object AqsSlider
-        $track.Size = New-Object System.Drawing.Size(100, 50)   # ширина - ниже, после сборки меню
+        $track.Size = New-Object System.Drawing.Size(100, 50)   # ширину ставит Update-MenuBattery
         $track.Value = $vol
-        $volHost = New-Object System.Windows.Forms.ToolStripControlHost($track)
-        $menu.Items.Add($volHost) | Out-Null
+        $menu.Items.Add((New-Object System.Windows.Forms.ToolStripControlHost($track))) | Out-Null
 
-        # меню собрано заранее - в момент открытия подтягиваем фактическую громкость
-        # (её могли поменять клавишами или в другом приложении)
-        $menu.Tag = $track
-        $menu.Add_Opening({ param($s, $e) try { $s.Tag.Value = [AqsVolume]::Get() } catch {} })
+        $menu.Tag = $track   # для Opening постоянного меню
 
         $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
     } catch {}   # нет устройства вывода - просто без ползунка
 
-    $script:toggleItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $script:toggleItem.Enabled = $script:state.ListenOn -or $script:defaultOutput -notmatch "Voicemeeter"
-    $script:toggleItem.Add_Click({ Toggle-Listen })
-    $menu.Items.Add($script:toggleItem) | Out-Null
-    Update-Icon   # надпись "Мониторинг: ..." ставит она же (заодно переставляет тот же значок)
+    $toggle = New-Object System.Windows.Forms.ToolStripMenuItem   # надпись ставит Update-Icon
+    $toggle.Tag = "boldTail"   # ВКЛ/ВЫКЛ жирным - Win11Renderer; по нему же его находит Refresh-Menu
+    $toggle.Enabled = $script:state.ListenOn -or $script:defaultOutput -notmatch "Voicemeeter"
+    $toggle.Add_Click({ Toggle-Listen })
+    $menu.Items.Add($toggle) | Out-Null
 
     # Штатный список устройств Windows (mmsys.cpl, вкладка "Воспроизведение") -
     # в Windows 11 он спрятан глубоко в параметрах, отсюда до него один клик.
@@ -686,39 +966,84 @@ function Build-Menu {
         [System.Windows.Forms.Application]::Exit()
     })
     $menu.Items.Add($exitItem) | Out-Null
-
-    Set-MenuTheme $menu
-    # Ширину меню задаёт самый длинный пункт; ползунок растягиваем на неё целиком,
-    # с тем же отступом справа, что и слева. Меню фиксируем (AutoSize off): иначе
-    # WinForms прибавил бы к ползунку запас под стрелку подменю и расширил меню.
-    if ($volHost) {
-        $menu.AutoSize = $false
-        $track.Width = $menu.Width - 2 * $volHost.Bounds.X
-    }
-
     return $menu
+}
+
+# Перед каждым показом (меню собрано заранее, цифры устарели бы): заряд беспроводных
+# (~5 мс) и ширина меню - самый длинный текст (у беспроводных вместе с "● 90") и
+# справа тот же отступ, что слева (12 px). Ширину считаем сами и фиксируем
+# (AutoSize off): WinForms прибавлял запас под стрелку подменю, а подменю у нас
+# нет. Ползунок растягиваем на эту ширину.
+function Update-MenuBattery($menu) {
+    $w = 0; $vh = $null
+    foreach ($i in $menu.Items) {
+        if ($i -is [System.Windows.Forms.ToolStripControlHost]) { $vh = $i; continue }
+        if ($i -isnot [System.Windows.Forms.ToolStripMenuItem]) { continue }
+        if ($i.Tag -is [array] -and $i.Tag[3]) { $i.Tag[4] = [AqsBattery]::Get($i.Tag[3]) }
+        $lvl = if ($i.Tag -is [array]) { $i.Tag[4] } else { -1 }
+        $w = [Math]::Max($w, [Win11Renderer]::ContentWidth($i.Text, $i.Font, $lvl))
+    }
+    $menu.Width = 12 + $w + 12
+    if ($vh) { $vh.Control.Width = $menu.Width - 2 * $vh.Bounds.X }
 }
 
 # Меню собирается ЗАРАНЕЕ, а не по правому клику. Сборка стоит ~180мс (запуск
 # svcl /sjson), и раньше эти 180мс висели ровно между нажатием кнопки и
 # появлением меню - именно это и ощущалось как задержка. Теперь клик показывает
 # уже готовое меню, а пересборка идёт после его закрытия, когда её не видно.
+# Меню одно на всё время работы: пересборка собирает пункты заново (Build-Menu) и
+# переносит их в него - так же и в открытое меню, если устройства сменились, пока
+# оно на экране (вместе с пунктами переезжают $script:toggleItem и ползунок).
+$script:menu = New-Object AqsMenu
+$script:menu.ShowImageMargin = $false
+$script:menu.Padding = New-Object System.Windows.Forms.Padding(1)
+$script:menu.AutoSize = $false   # ширину ставит Update-MenuBattery, высоту - Refresh-Menu
+Set-RoundedCorners $script:menu
+# internal-свойство; почему выключено - см. показ меню по правому клику
+$script:menu.GetType().GetProperty('WorkingAreaConstrained', [Reflection.BindingFlags]'NonPublic,Instance').SetValue($script:menu, $false)
+# При клике по пункту WinForms сначала закрывает меню (Closed), и только потом
+# вызывает Click. Синхронная пересборка тут (~200 мс) задерживала сам клик:
+# мониторинг выключался через ~420 мс. BeginInvoke откладывает её до конца клика.
+$script:menu.Add_Closed({ param($s) $s.BeginInvoke([Action]{ Refresh-Menu }) | Out-Null })
+$script:menu.Add_Opening({ param($s, $e)
+    # тему Windows могли переключить после сборки - перекрашиваем (без svcl, пара мс);
+    # громкость могли поменять клавишами или в другом приложении
+    if ((Get-IsDarkTheme) -ne $script:menuDark) { Set-MenuTheme $s }
+    try { $s.Tag.Value = [AqsVolume]::Get() } catch {}
+})
+# сейчас не подключённые устройства сохраняют место в списке - в его конце
+$script:menu.Add_Reordered({ param($s)
+    $ids = @($s.Items | Where-Object { $_.Tag -is [array] } | ForEach-Object { $_.Tag[0] })
+    $script:state | Add-Member -Force NoteProperty Order @($ids + @($script:state.Order | Where-Object { $_ -and $ids -notcontains $_ }))
+    Save-State $script:state
+})
+
 function Refresh-Menu {
-    # Старое меню намеренно не освобождаем: Refresh-Menu вызывается в том числе
-    # из события Closed, когда прежнее меню ещё закрывается, и Dispose() на нём
-    # роняет приложение. Так же вело себя и прежнее пересоздание по клику.
-    $menu = Build-Menu
-    # При клике по пункту WinForms сначала закрывает меню (Closed), и только потом
-    # вызывает Click. Синхронная пересборка тут (~200 мс) задерживала сам клик:
-    # мониторинг выключался через ~420 мс. BeginInvoke откладывает её до конца клика -
-    # заодно галочка устройства гарантированно ставится уже после переключения.
-    $menu.Add_Closed({ param($s) $s.BeginInvoke([Action]{ Refresh-Menu }) | Out-Null })
-    # меню собрано заранее: если тему Windows переключили после сборки, перекрашиваем
-    # при открытии (только цвета, без svcl - пара миллисекунд)
-    $menu.Add_Opening({ param($s, $e) if ((Get-IsDarkTheme) -ne $script:menuDark) { Set-MenuTheme $s } })
-    # internal-свойство; почему выключено - см. показ меню по правому клику
-    $menu.GetType().GetProperty('WorkingAreaConstrained', [Reflection.BindingFlags]'NonPublic,Instance').SetValue($menu, $false)
-    $script:menu = $menu
+    $m = $script:menu
+    $bottom = $m.Bottom
+    $wasDefault = $script:defaultId
+    $new = Build-Menu
+    # Открытое меню с теми же устройствами и тем же выбранным (уведомление о нашем же
+    # переключении и т.п.) не трогаем: замена пунктов пересоздаёт окно ползунка, и
+    # меню заметно моргало.
+    $ids = @($new.Items | Where-Object { $_.Tag -is [array] } | ForEach-Object { $_.Tag[0] })
+    if ($m.Visible -and "$ids" -eq "$script:devIds" -and $script:defaultId -eq $wasDefault) { $new.Dispose(); return }
+    $script:devIds = $ids
+    $old = @($m.Items)
+    $m.SuspendLayout()
+    $m.Items.Clear()
+    foreach ($i in @($new.Items)) { $m.Items.Add($i) | Out-Null }
+    $m.ResumeLayout()
+    $old | ForEach-Object { $_.Dispose() }   # у ползунка своё окно - не копим
+    $m.Tag = $new.Tag
+    # -is [string]: у устройств Tag - массив с $true, а $true -eq "boldTail" в PowerShell истина
+    $script:toggleItem = $m.Items | Where-Object { $_.Tag -is [string] -and $_.Tag -eq "boldTail" }
+    Update-Icon   # надпись "Мониторинг: ..." (заодно переставляет тот же значок)
+    $new.Dispose()
+    Set-MenuTheme $m
+    Update-MenuBattery $m
+    $m.Height = $m.GetPreferredSize([System.Drawing.Size]::Empty).Height
+    if ($m.Visible) { $m.Top = $bottom - $m.Height }   # низ - у панели задач
 }
 
 Refresh-Menu
@@ -727,6 +1052,36 @@ Refresh-Menu
 # уходит в его виртуальный вход, а сам Voicemeeter никто не запустил - тишина.
 # Build-Menu уже узнал текущее устройство, поднимаем Voicemeeter сразу.
 if ($script:defaultOutput -match "Voicemeeter") { Start-Voicemeeter | Out-Null }
+
+# Устройство подключили/отключили или сменили мимо утилиты - пересобираем меню сразу,
+# а не при следующем закрытии (иначе свежеподключённых Bluetooth-наушников в нём не
+# было), в том числе открытое; пока в нём перетаскивают пункт - не трогаем,
+# пересоберётся при закрытии.
+[AqsDeviceWatch]::add_Changed({
+    $known = $script:devIds; $wasDefault = $script:defaultId
+    if (-not $script:menu.Dragging) { Refresh-Menu }
+    $devs = @($script:menu.Items | Where-Object { $_.Tag -is [array] })
+    # Подключились беспроводные наушники - звук на них. Windows сама переводит, только
+    # если они и были устройством по умолчанию до отключения (а не, скажем, Voicemeeter).
+    $to = $devs | Where-Object { $_.Tag[5] -and $known -notcontains $_.Tag[0] } | Select-Object -First 1
+    # Отключилось устройство, на котором был звук: Windows подставляет что попало (часто
+    # Voicemeeter Input без запущенного Voicemeeter - тишина). Возвращаем на последнее
+    # выбранное из подключённых, Voicemeeter тоже (Set-OutputDevice его запустит);
+    # истории нет - на первое не-Voicemeeter в меню.
+    if (-not $to -and $wasDefault -and $script:devIds -notcontains $wasDefault) {
+        $to = @(foreach ($id in @($script:state.Recent)) { $devs | Where-Object { $_.Tag[0] -eq $id } }) +
+              @($devs | Where-Object { $_.Tag[1] -notmatch "Voicemeeter" }) | Select-Object -First 1
+    }
+    # и сразу пересобираем: меню одним кадром покажет итог, без промежуточного выбора Windows
+    if ($to -and -not $to.Tag[2]) { Set-OutputDevice $to.Tag[0] $to.Tag[1] $to.Tag[5]; Refresh-Menu }
+    # Вывод ушёл с Voicemeeter - гасим его. Единственное место: переключение из меню
+    # тоже приходит сюда уведомлением, а мимо утилиты Windows сама переключается,
+    # например, на только что подключённые наушники.
+    if ($voicemeeterProcessName -and $script:defaultOutput -notmatch "Voicemeeter") {
+        Get-Process -Name $voicemeeterProcessName -ErrorAction SilentlyContinue | Stop-Process -Force
+    }
+})
+[AqsDeviceWatch]::Start()
 
 $notifyIcon.Add_MouseDown({
     param($s, $e)
@@ -748,6 +1103,7 @@ $notifyIcon.Add_MouseUp({
     param($s, $e)
     if ($e.Button -ne [System.Windows.Forms.MouseButtons]::Right) { return }
     [DwmHelper]::SetForegroundWindow($trayWindow.Handle) | Out-Null
+    Update-MenuBattery $script:menu   # до расчёта позиции: ширина зависит от заряда
     # как у других значков трея (Telegram и т.п.): левый край - по левому краю
     # значка, низ - на 1 px ниже рабочей области: поверх светлой линии по верхнему
     # краю панели задач. Иначе она шла вплотную к светлой рамке меню и выглядела
@@ -763,4 +1119,21 @@ $notifyIcon.Add_MouseUp({
 })
 
 Update-Icon
+
+# При входе в Windows утилита может стартовать раньше, чем панель задач готова принять
+# значок: Shell_NotifyIcon не срабатывает, а WinForms всё равно считает значок
+# добавленным и больше не пробует - процесс жив, значка нет. Первую минуту проверяем,
+# что значок на месте, и если нет - добавляем заново (с записью в tray.log).
+$trayCheck = New-Object System.Windows.Forms.Timer
+$trayCheck.Interval = 2000
+$script:trayChecks = 0
+$trayCheck.Add_Tick({
+    if ([DwmHelper]::TrayIconLeft($trayWindow.Handle, $trayIconId) -lt 0) {
+        $notifyIcon.Visible = $false; $notifyIcon.Visible = $true
+        Add-Content (Join-Path (Split-Path $stateFile) "tray.log") "$(Get-Date -Format s) значка нет - добавлен заново"
+    }
+    if (++$script:trayChecks -ge 30) { $trayCheck.Stop() }
+})
+$trayCheck.Start()
+
 [System.Windows.Forms.Application]::Run()
