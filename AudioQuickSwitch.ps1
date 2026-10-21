@@ -1068,12 +1068,15 @@ if ($script:defaultOutput -match "Voicemeeter") { Start-Voicemeeter | Out-Null }
     # Voicemeeter Input без запущенного Voicemeeter - тишина). Возвращаем на последнее
     # выбранное из подключённых, Voicemeeter тоже (Set-OutputDevice его запустит);
     # истории нет - на первое не-Voicemeeter в меню.
-    if (-not $to -and $wasDefault -and $script:devIds -notcontains $wasDefault) {
+    $vanished = $wasDefault -and $script:devIds -notcontains $wasDefault
+    if (-not $to -and $vanished) {
         $to = @(foreach ($id in @($script:state.Recent)) { $devs | Where-Object { $_.Tag[0] -eq $id } }) +
               @($devs | Where-Object { $_.Tag[1] -notmatch "Voicemeeter" }) | Select-Object -First 1
     }
     # и сразу пересобираем: меню одним кадром покажет итог, без промежуточного выбора Windows
-    if ($to -and -not $to.Tag[2]) { Set-OutputDevice $to.Tag[0] $to.Tag[1] $to.Tag[5]; Refresh-Menu }
+    if ($to -and -not $to.Tag[2]) { Set-OutputDevice $to.Tag[0] $to.Tag[1] $to.Tag[5]; Refresh-Menu }   # уведомление - там
+    # Windows сама выбрала то же (переключила на наушники / с отключённого) - всё равно сообщаем
+    elseif ($to -or $vanished) { Show-Toast "Устройство: $script:defaultOutput" }
     # Вывод ушёл с Voicemeeter - гасим его. Единственное место: переключение из меню
     # тоже приходит сюда уведомлением, а мимо утилиты Windows сама переключается,
     # например, на только что подключённые наушники.
