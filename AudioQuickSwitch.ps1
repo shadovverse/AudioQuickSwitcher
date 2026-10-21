@@ -322,6 +322,7 @@ public class AqsMenu : ContextMenuStrip {
             pulse.Interval = 30;
             pulse.Tick += delegate { Invalidate(SpriteRect()); };
             pulse.Start();
+            Capture = true;   // отпускание где угодно на экране - тоже нам
         }
         if (drag == null) { base.OnMouseMove(e); return; }
         // плашка ходит только в пределах блока устройств
@@ -343,12 +344,21 @@ public class AqsMenu : ContextMenuStrip {
         Invalidate();   // без base: подсветка не бегает за курсором по пунктам
     }
     protected override void OnMouseUp(MouseEventArgs e) {
+        if (!StopDrag()) base.OnMouseUp(e);
+    }
+    // Мышь ушла (отпустили далеко за меню, переключили окно) или меню закрылось -
+    // перетаскивание кончается тоже, иначе снимок плашки так и висел поверх списка.
+    protected override void OnMouseCaptureChanged(EventArgs e) { StopDrag(); base.OnMouseCaptureChanged(e); }
+    protected override void OnClosed(ToolStripDropDownClosedEventArgs e) { StopDrag(); base.OnClosed(e); }
+    bool StopDrag() {   // false - перетаскивания не было
         pressed = null;
-        if (drag == null) { base.OnMouseUp(e); return; }
+        if (drag == null) return false;
         pulse.Dispose(); sprite.Dispose(); glow.Dispose();
         drag = null;
+        Capture = false;
         Invalidate();
         if (Reordered != null) Reordered(this, EventArgs.Empty);
+        return true;
     }
     protected override void OnPaint(PaintEventArgs e) {
         base.OnPaint(e);
