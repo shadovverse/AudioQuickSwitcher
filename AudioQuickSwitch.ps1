@@ -18,6 +18,12 @@ using System.Windows.Forms;
 public class DwmHelper {
     [DllImport("dwmapi.dll")]
     public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+    // Рамку скруглённого окна Windows 11 рисует сама и по умолчанию полупрозрачной -
+    // сквозь неё просвечивало то, что под окном. Красим её сплошным цветом.
+    public static void SetBorder(IntPtr h, Color c) {
+        int v = c.R | (c.G << 8) | (c.B << 16);   // COLORREF
+        try { DwmSetWindowAttribute(h, 34, ref v, 4); } catch { }   // DWMWA_BORDER_COLOR
+    }
 
     // Запуск без курсора "запуск приложения" (стрелка с колёсиком). Его Windows
     // показывает, когда программу запускает процесс с окнами - а утилита с 1.2.0
@@ -91,7 +97,7 @@ public class Win11Renderer : ToolStripProfessionalRenderer {
 
     // Заряд беспроводного устройства после названия: "realme Buds Air8 Pro ● 100".
     // Точка со свечением - цвет плавно зелёный -> жёлтый (50) -> красный; число
-    // жирным, цветом текста пункта. Уровень - Tag[4] пункта (-1 - не рисуем),
+    // жирным, обычным цветом текста меню. Уровень - Tag[4] пункта (-1 - не рисуем),
     // ширину меню под это считает Build-Menu (ContentWidth).
     const int D = 8;   // диаметр точки
     const TextFormatFlags NoPad = TextFormatFlags.NoPadding;
@@ -124,8 +130,12 @@ public class Win11Renderer : ToolStripProfessionalRenderer {
                 TextRenderer.DrawText(e.Graphics, e.Text.Substring(colon + 1), bold, new Rectangle(hx, r.Y, r.Right - hx, r.Height), tc, e.TextFormat | NoPad);
             return;
         }
-        base.OnRenderItemText(e);
         object[] tag = e.Item.Tag as object[];
+        // активное устройство - с мягким свечением своего (акцентного) цвета
+        if (tag != null && tag.Length > 2 && tag[2] is bool && (bool)tag[2] && e.Text == tag[1] as string) {
+            Glow(e.Graphics, e.Text, e.TextFont, e.TextRectangle, e.TextFormat, e.TextColor);
+        }
+        base.OnRenderItemText(e);
         // WinForms зовёт это и для пустого поля горячей клавиши - рисуем только у названия
         if (tag == null || tag.Length < 5 || !(tag[4] is int) || (int)tag[4] < 0 || e.Text != tag[1] as string) return;
         int level = Math.Min(100, (int)tag[4]);
@@ -158,7 +168,33 @@ public class Win11Renderer : ToolStripProfessionalRenderer {
         }
         using (Brush b = new SolidBrush(c)) e.Graphics.FillEllipse(b, x, y, D, D);
         using (Font bold = new Font(e.TextFont, FontStyle.Bold))
-            TextRenderer.DrawText(e.Graphics, level.ToString(), bold, new Rectangle(x + D + 5, t.Y, 60, t.Height), e.TextColor, e.TextFormat | NoPad);
+            TextRenderer.DrawText(e.Graphics, level.ToString(), bold, new Rectangle(x + D + 5, t.Y, 60, t.Height), e.ToolStrip.ForeColor, e.TextFormat | NoPad);   // обычным цветом текста меню, не акцентным
+    }
+    // Свечение под текстом по форме букв, мягкое, как у точки заряда. Буквы для него
+    // рисуются тем же TextRenderer'ом и с теми же r/flags, что и сам текст (контур
+    // через GDI+ шире и ниже - на длинной строке ореол уезжал на 3 px), белым по
+    // чёрному; ColorMatrix делает из этого маску цвета c (яркость -> прозрачность),
+    // и она накладывается со сдвигами по кругу на 1..R px: ближние кольца плотнее.
+    public static void Glow(Graphics g, string text, Font f, Rectangle r, TextFormatFlags flags, Color c) {
+        const int R = 4;
+        using (Bitmap m = new Bitmap(r.Width + 2 * R, r.Height + 2 * R))
+        using (System.Drawing.Imaging.ImageAttributes ia = new System.Drawing.Imaging.ImageAttributes()) {
+            using (Graphics mg = Graphics.FromImage(m)) {
+                mg.Clear(Color.Black);
+                TextRenderer.DrawText(mg, text, f, new Rectangle(R, R, r.Width, r.Height), Color.White, flags);
+            }
+            System.Drawing.Imaging.ColorMatrix cm = new System.Drawing.Imaging.ColorMatrix();
+            cm.Matrix00 = cm.Matrix11 = cm.Matrix22 = cm.Matrix33 = 0;   // цвет - постоянный c,
+            cm.Matrix40 = c.R / 255f; cm.Matrix41 = c.G / 255f; cm.Matrix42 = c.B / 255f;
+            for (int k = R; k >= 1; k--) {
+                cm.Matrix03 = (3 + 2 * (R - k)) / 255f;   // прозрачность - из яркости букв; k=R: 3 ... k=1: 9
+                ia.SetColorMatrix(cm);
+                for (int i = 0; i < 12; i++) {
+                    int dx = (int)Math.Round(k * Math.Cos(i * Math.PI / 6)), dy = (int)Math.Round(k * Math.Sin(i * Math.PI / 6));
+                    g.DrawImage(m, new Rectangle(r.X - R + dx, r.Y - R + dy, m.Width, m.Height), 0, 0, m.Width, m.Height, GraphicsUnit.Pixel, ia);
+                }
+            }
+        }
     }
     static Color Lerp(Color a, Color b, float t) {
         return Color.FromArgb((int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
@@ -521,19 +557,21 @@ public class AqsSlider : Control {
 // кнопки на панели задач, над треем, закрывается само или по клику.
 public class AqsToast : Form {
     static AqsToast current;
-    Icon logo; string title, head, tail; bool dark; Font bold;
+    Icon logo; string title, head, tail; bool dark; Font bold; Color accent;
     Timer timer = new Timer();
     const int Pad = 16, LogoSize = 32;
     const TextFormatFlags NoPad = TextFormatFlags.NoPadding;
 
-    AqsToast(Icon logo, string title, string text, bool dark) {
-        this.logo = logo; this.title = title; this.dark = dark;
-        // "Устройство: realme Buds Air8 Pro" - то, что после двоеточия, жирным
+    AqsToast(Icon logo, string title, string text, bool dark, Color accent) {
+        this.logo = logo; this.title = title; this.dark = dark; this.accent = accent;
+        // "Устройство: realme Buds Air8 Pro" - то, что после двоеточия, жирным и акцентным цветом
         int c = text.IndexOf(':');
         head = c < 0 ? text : text.Substring(0, c + 1);
         tail = c < 0 ? "" : text.Substring(c + 1);
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
+        // фон и текст - одним кадром (без отдельной заливки фона до OnPaint)
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
         StartPosition = FormStartPosition.Manual;
         Font = SystemFonts.MessageBoxFont;
         bold = new Font(Font, FontStyle.Bold);
@@ -559,6 +597,7 @@ public class AqsToast : Form {
         base.OnHandleCreated(e);
         int round = 2;   // DWMWCP_ROUND, только Windows 11
         try { DwmHelper.DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)); } catch { }
+        DwmHelper.SetBorder(Handle, dark ? Color.FromArgb(50, 50, 50) : Color.FromArgb(220, 220, 220));
     }
     protected override void OnPaint(PaintEventArgs e) {
         Graphics g = e.Graphics;
@@ -569,18 +608,24 @@ public class AqsToast : Form {
         TextRenderer.DrawText(g, title, bold, new Point(x, cy - 19), dark ? Color.White : Color.Black, NoPad);
         Color tc = dark ? Color.FromArgb(200, 200, 200) : Color.FromArgb(90, 90, 90);
         TextRenderer.DrawText(g, head, Font, new Point(x, cy + 1), tc, NoPad);
-        TextRenderer.DrawText(g, tail, bold, new Point(x + TextRenderer.MeasureText(g, head, Font, Size.Empty, NoPad).Width, cy + 1), tc, NoPad);
+        int tx = x + TextRenderer.MeasureText(g, head, Font, Size.Empty, NoPad).Width;
+        Win11Renderer.Glow(g, tail, bold, new Rectangle(new Point(tx, cy + 1), TextRenderer.MeasureText(g, tail, bold, Size.Empty, NoPad)), NoPad, accent);
+        TextRenderer.DrawText(g, tail, bold, new Point(tx, cy + 1), accent, NoPad);
         using (Pen p = new Pen(dark ? Color.FromArgb(50, 50, 50) : Color.FromArgb(220, 220, 220)))
             g.DrawRectangle(p, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
     }
     protected override void OnFormClosed(FormClosedEventArgs e) { timer.Dispose(); bold.Dispose(); base.OnFormClosed(e); }
 
-    public static void Pop(Icon logo, string title, string text, bool dark) {
+    public static void Pop(Icon logo, string title, string text, bool dark, Color accent) {
         if (current != null && !current.IsDisposed) current.Close();
-        current = new AqsToast(logo, title, text, dark);
+        current = new AqsToast(logo, title, text, dark, accent);
         Rectangle wa = Screen.PrimaryScreen.WorkingArea;
         current.Location = new Point(wa.Right - current.Width - 12, wa.Bottom - current.Height - 12);
         current.Show();
+        // Рисуем сразу, а не когда дойдёт очередь сообщений: уведомление показывается
+        // посреди переключения (дальше svcl и пересборка меню, ~0.3 с), и всё это
+        // время плашка висела пустой - текст появлялся следом.
+        current.Update();
         current.timer.Start();
     }
 }
@@ -681,6 +726,7 @@ function Set-RoundedCorners($ctrl) {
             $pref = 2  # DWMWCP_ROUND
             [DwmHelper]::DwmSetWindowAttribute($s.Handle, 33, [ref]$pref, 4) | Out-Null
         } catch {}
+        [DwmHelper]::SetBorder($s.Handle, $script:menuBorder)   # цвет - из Set-MenuTheme
     })
 }
 
@@ -698,22 +744,25 @@ function Set-MenuTheme($menu) {
         $border = [System.Drawing.Color]::FromArgb(255, 220, 220, 220)
         $fg     = [System.Drawing.Color]::Black
     }
+    $accent = Get-AccentColor $isDark
     $colorTable = New-Object Win11ColorTable($bg, $hover, $border)
     $menu.Renderer = New-Object Win11Renderer($colorTable)
     $menu.BackColor = $bg
+    $script:menuBorder = $border   # рамка окна Windows 11 - тем же цветом (Set-RoundedCorners)
+    if ($menu.IsHandleCreated) { [DwmHelper]::SetBorder($menu.Handle, $border) }
     $menu.ForeColor = $fg
     foreach ($it in $menu.Items) {
         if ($it -is [System.Windows.Forms.ToolStripMenuItem]) {
-            # устройство вывода: текущее - обычным цветом, остальные затенены (но кликабельны)
-            $it.ForeColor = if ($it.Tag -is [array] -and -not $it.Tag[2]) { [System.Drawing.SystemColors]::GrayText } else { $fg }
+            # устройство вывода: текущее - акцентным цветом, остальные затенены (но кликабельны)
+            $it.ForeColor = if ($it.Tag -isnot [array]) { $fg } elseif ($it.Tag[2]) { $accent } else { [System.Drawing.SystemColors]::GrayText }
         }
         if ($it.Control -is [AqsSlider]) {
             $s = $it.Control
             $s.BackColor = $bg; $s.ForeColor = $fg; $s.Dark = $isDark
-            $s.Accent = Get-AccentColor $isDark
+            $s.Accent = $accent
         }
     }
-    $menu.Glow = Get-AccentColor $isDark
+    $menu.Glow = $accent
 }
 
 function New-MicIcon([System.Drawing.Color]$bg) {
@@ -767,7 +816,8 @@ $toastLogo = $null
 try { $toastLogo = New-Object System.Drawing.Icon((Join-Path $scriptDir "app_icon.ico"), 32, 32) } catch {}
 
 function Show-Toast($text) {
-    try { [AqsToast]::Pop($toastLogo, "AudioQuickSwitch", $text, (Get-IsDarkTheme)) } catch {}   # уведомление - не повод ронять переключение
+    $dark = Get-IsDarkTheme
+    try { [AqsToast]::Pop($toastLogo, "AudioQuickSwitch", $text, $dark, (Get-AccentColor $dark)) } catch {}   # уведомление - не повод ронять переключение
 }
 
 function Update-Icon {
