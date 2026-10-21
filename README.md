@@ -6,6 +6,10 @@
 
 + **Включение/отключение** мониторинга активного устройства записи (*внутри трей-меню или по клику на иконку в **панели задач/трее***).
 
++ Удобная настройка списка **перетаскиванием** устройств.
+
++ Отображение **уровня заряда** беспроводных устройств.
+
 ![Меню AudioQuickSwitch](docs/menu_example.png)
 
 ## [eng] ##
@@ -15,4 +19,6 @@
 
 + **Enable/disable** active recording device monitoring  (*in the tray menu or by clicking the icon in the **taskbar/system-tray***).
 
++ Convenient list configuration by **drag & drop** devices.
 
++ Display the **battery charge level** for wireless devices.
