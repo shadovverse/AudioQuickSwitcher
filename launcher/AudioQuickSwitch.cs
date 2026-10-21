@@ -14,7 +14,7 @@ using System.Threading;
 [assembly: AssemblyTitle("AudioQuickSwitch")]
 [assembly: AssemblyProduct("AudioQuickSwitch")]
 // версия программы - единственное место; установщик берёт её отсюда (из готового exe)
-[assembly: AssemblyFileVersion("1.2.0")]
+[assembly: AssemblyFileVersion("1.3.0")]
 
 static class Program {
     [DllImport("kernel32.dll")]
